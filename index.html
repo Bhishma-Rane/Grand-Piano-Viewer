@@ -1,0 +1,2996 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <title>LuminaKeys 4K — Procedural MIDI Piano Visualizer</title>
+
+  <!-- Reliable CDNs: @tonejs/midi for binary MIDI parsing, mp4-muxer for direct offline 4K MP4 muxing -->
+  <script src="https://cdn.jsdelivr.net/npm/@tonejs/midi@2.0.28/build/Midi.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mp4-muxer@5.2.2/build/mp4-muxer.min.js"></script>
+
+  <style>
+    :root {
+      --bg-deep: #04060d;
+      --glass-bg: rgba(11, 16, 30, 0.78);
+      --glass-border: rgba(255, 255, 255, 0.13);
+      --glass-hover: rgba(255, 255, 255, 0.12);
+      --text-main: #f0f4ff;
+      --text-muted: #8b9bb8;
+      --accent-rh: #00f3ff;
+      --accent-lh: #ff00aa;
+      --radius-lg: 18px;
+      --radius-md: 12px;
+      --radius-sm: 8px;
+    }
+
+    * {
+      box-sizing: border-box;
+      -webkit-tap-highlight-color: transparent;
+      user-select: none;
+      -webkit-user-select: none;
+    }
+
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      background: #020308;
+      color: var(--text-main);
+      font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "Segoe UI", Roboto, Inter, sans-serif;
+    }
+
+    /* Fullscreen responsive 16:9 stage */
+    #stage-container {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: radial-gradient(circle at 50% 45%, #0a1024 0%, #020308 100%);
+      overflow: hidden;
+    }
+
+    #visualizer-canvas {
+      width: 100vw;
+      height: 56.25vw; /* 16:9 */
+      max-height: 100vh;
+      max-width: 177.7778vh; /* 16:9 */
+      display: block;
+      background: var(--bg-deep);
+      box-shadow: 0 24px 80px rgba(0, 0, 0, 0.85), 0 0 1px rgba(255, 255, 255, 0.15);
+      cursor: pointer;
+    }
+
+    /* Drag & Drop overlay */
+    #drop-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(4, 10, 26, 0.82);
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+      border: 2px dashed var(--accent-rh);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      z-index: 90;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s ease;
+    }
+
+    #drop-overlay.visible {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    #drop-overlay h2 {
+      margin: 0;
+      font-size: 1.6rem;
+      letter-spacing: 0.04em;
+      color: var(--accent-rh);
+    }
+
+    /* Top Status Bar */
+    #top-bar {
+      position: fixed;
+      top: max(14px, env(safe-area-inset-top));
+      left: max(16px, env(safe-area-inset-left));
+      right: max(16px, env(safe-area-inset-right));
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      z-index: 40;
+      pointer-events: none;
+      transition: opacity 0.35s ease, transform 0.35s ease;
+    }
+
+    #top-bar.hidden-ui {
+      opacity: 0;
+      transform: translateY(-16px);
+    }
+
+    .pill {
+      pointer-events: auto;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 14px;
+      border-radius: 999px;
+      background: var(--glass-bg);
+      backdrop-filter: blur(18px);
+      -webkit-backdrop-filter: blur(18px);
+      border: 1px solid var(--glass-border);
+      font-size: 0.82rem;
+      font-weight: 500;
+      color: var(--text-main);
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #f59e0b;
+      box-shadow: 0 0 10px #f59e0b;
+      flex-shrink: 0;
+    }
+
+    .status-dot.ready {
+      background: #10b981;
+      box-shadow: 0 0 10px #10b981;
+    }
+
+    .status-dot.fallback {
+      background: #38bdf8;
+      box-shadow: 0 0 10px #38bdf8;
+    }
+
+    #toggle-ui-btn {
+      position: fixed;
+      top: max(14px, env(safe-area-inset-top));
+      right: max(16px, env(safe-area-inset-right));
+      z-index: 45;
+      pointer-events: auto;
+      border: 1px solid var(--glass-border);
+      background: var(--glass-bg);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      color: var(--text-main);
+      border-radius: 999px;
+      padding: 8px 14px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      opacity: 0.92;
+      transition: background 0.2s, opacity 0.2s;
+    }
+
+    #toggle-ui-btn:hover {
+      background: rgba(25, 36, 64, 0.9);
+      opacity: 1;
+    }
+
+    /* Floating Glassmorphism Control Dock */
+    #control-dock {
+      position: fixed;
+      bottom: max(16px, env(safe-area-inset-bottom));
+      left: 50%;
+      transform: translateX(-50%);
+      width: min(1040px, calc(100vw - 24px));
+      background: var(--glass-bg);
+      backdrop-filter: blur(22px) saturate(140%);
+      -webkit-backdrop-filter: blur(22px) saturate(140%);
+      border: 1px solid var(--glass-border);
+      border-radius: var(--radius-lg);
+      padding: 14px 18px;
+      z-index: 40;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.65), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      transition: opacity 0.35s ease, transform 0.35s cubic-bezier(0.22, 1, 0.36, 1);
+    }
+
+    #control-dock.hidden-ui {
+      opacity: 0;
+      transform: translate(-50%, 30px);
+      pointer-events: none;
+    }
+
+    /* Timeline Row */
+    .timeline-row {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .time-label {
+      font-variant-numeric: tabular-nums;
+      font-size: 0.78rem;
+      color: var(--text-muted);
+      min-width: 42px;
+      text-align: center;
+    }
+
+    #timeline-scrubber {
+      flex: 1;
+      height: 6px;
+      -webkit-appearance: none;
+      appearance: none;
+      background: rgba(255, 255, 255, 0.14);
+      border-radius: 999px;
+      outline: none;
+      cursor: pointer;
+    }
+
+    #timeline-scrubber::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: #ffffff;
+      box-shadow: 0 0 12px var(--accent-rh), 0 2px 6px rgba(0, 0, 0, 0.5);
+      cursor: pointer;
+      transition: transform 0.15s;
+    }
+
+    #timeline-scrubber::-webkit-slider-thumb:active {
+      transform: scale(1.2);
+    }
+
+    /* Primary Controls Row */
+    .controls-main {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+    }
+
+    .btn-group {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    button.btn, label.btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+      padding: 9px 14px;
+      min-height: 38px;
+      border-radius: var(--radius-md);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      background: rgba(255, 255, 255, 0.07);
+      color: var(--text-main);
+      font-size: 0.82rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.18s ease;
+      white-space: nowrap;
+    }
+
+    button.btn:hover, label.btn:hover {
+      background: rgba(255, 255, 255, 0.14);
+      border-color: rgba(255, 255, 255, 0.25);
+    }
+
+    button.btn:active, label.btn:active {
+      transform: scale(0.97);
+    }
+
+    button.btn:disabled {
+      opacity: 0.45;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    button.btn-primary {
+      background: linear-gradient(135deg, #00c6ff 0%, #0072ff 100%);
+      border-color: rgba(0, 243, 255, 0.45);
+      color: #ffffff;
+      box-shadow: 0 4px 18px rgba(0, 174, 255, 0.35);
+    }
+
+    button.btn-primary:hover {
+      filter: brightness(1.12);
+      background: linear-gradient(135deg, #00d4ff 0%, #0a7fff 100%);
+    }
+
+    button.btn-export {
+      background: linear-gradient(135deg, #ff0088 0%, #7b2cff 100%);
+      border-color: rgba(255, 0, 170, 0.45);
+      color: #ffffff;
+      box-shadow: 0 4px 18px rgba(200, 0, 255, 0.35);
+    }
+
+    button.btn-export:hover {
+      filter: brightness(1.12);
+    }
+
+    select.ctrl-select {
+      min-height: 38px;
+      padding: 6px 10px;
+      border-radius: var(--radius-md);
+      border: 1px solid rgba(255, 255, 255, 0.14);
+      background: rgba(15, 22, 42, 0.92);
+      color: var(--text-main);
+      font-size: 0.8rem;
+      font-weight: 500;
+      outline: none;
+      cursor: pointer;
+    }
+
+    /* Expandable Visual & Audio Settings Drawer */
+    #settings-drawer {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(175px, 1fr));
+      gap: 12px 16px;
+      padding-top: 10px;
+      border-top: 1px solid rgba(255, 255, 255, 0.09);
+      transition: all 0.25s ease;
+    }
+
+    #settings-drawer.collapsed {
+      display: none;
+    }
+
+    .setting-item {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+    }
+
+    .setting-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-size: 0.74rem;
+      color: var(--text-muted);
+      font-weight: 600;
+      letter-spacing: 0.02em;
+    }
+
+    .setting-header span.val {
+      color: var(--text-main);
+      font-variant-numeric: tabular-nums;
+    }
+
+    input[type="range"].mini-slider {
+      width: 100%;
+      height: 5px;
+      -webkit-appearance: none;
+      appearance: none;
+      background: rgba(255, 255, 255, 0.14);
+      border-radius: 999px;
+      outline: none;
+    }
+
+    input[type="range"].mini-slider::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 15px;
+      height: 15px;
+      border-radius: 50%;
+      background: #e2ecff;
+      border: 2px solid #00c6ff;
+      cursor: pointer;
+    }
+
+    .color-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .color-chip {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+      padding: 5px 10px;
+      background: rgba(255, 255, 255, 0.06);
+      border: 1px solid rgba(255, 255, 255, 0.12);
+      border-radius: var(--radius-sm);
+      font-size: 0.74rem;
+      color: var(--text-main);
+    }
+
+    input[type="color"] {
+      width: 24px;
+      height: 24px;
+      border: none;
+      border-radius: 6px;
+      background: transparent;
+      cursor: pointer;
+      padding: 0;
+    }
+
+    /* Export Progress Modal (Outside Canvas) */
+    #export-modal {
+      position: fixed;
+      inset: 0;
+      background: rgba(2, 5, 14, 0.84);
+      backdrop-filter: blur(18px);
+      -webkit-backdrop-filter: blur(18px);
+      z-index: 100;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+
+    #export-modal.active {
+      display: flex;
+    }
+
+    .export-card {
+      width: min(480px, 100%);
+      background: rgba(12, 18, 36, 0.94);
+      border: 1px solid rgba(255, 255, 255, 0.15);
+      border-radius: 20px;
+      padding: 24px 26px;
+      box-shadow: 0 28px 80px rgba(0, 0, 0, 0.75);
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .export-card h3 {
+      margin: 0;
+      font-size: 1.15rem;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .export-badge {
+      font-size: 0.7rem;
+      padding: 3px 9px;
+      border-radius: 999px;
+      background: rgba(255, 0, 170, 0.2);
+      border: 1px solid rgba(255, 0, 170, 0.5);
+      color: #ff70cf;
+      font-weight: 700;
+      letter-spacing: 0.04em;
+    }
+
+    .export-status-text {
+      font-size: 0.86rem;
+      color: var(--text-muted);
+      line-height: 1.45;
+    }
+
+    .progress-track {
+      width: 100%;
+      height: 10px;
+      border-radius: 999px;
+      background: rgba(255, 255, 255, 0.1);
+      overflow: hidden;
+    }
+
+    .progress-fill {
+      height: 100%;
+      width: 0%;
+      border-radius: 999px;
+      background: linear-gradient(90deg, #00f3ff, #a855f7, #ff00aa);
+      transition: width 0.12s linear;
+    }
+
+    .export-meta {
+      display: flex;
+      justify-content: space-between;
+      font-size: 0.78rem;
+      color: var(--text-muted);
+      font-variant-numeric: tabular-nums;
+    }
+
+    .export-note {
+      font-size: 0.74rem;
+      color: #7c8ca8;
+      background: rgba(255, 255, 255, 0.04);
+      padding: 9px 12px;
+      border-radius: 10px;
+      line-height: 1.4;
+    }
+
+    #midi-file-input {
+      display: none;
+    }
+
+    /* Compact responsive adjustments for iPad portrait / smaller widths */
+    @media (max-width: 760px) {
+      #control-dock {
+        padding: 12px;
+        gap: 10px;
+      }
+      button.btn, label.btn {
+        padding: 8px 10px;
+        font-size: 0.76rem;
+      }
+      #song-pill {
+        display: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div id="stage-container">
+    <canvas id="visualizer-canvas" width="1920" height="1080"></canvas>
+  </div>
+
+  <div id="drop-overlay">
+    <h2>Drop MIDI File (.mid / .midi)</h2>
+    <span style="color: var(--text-muted); font-size: 0.95rem;">Loads directly into the Salamander Grand Piano & 4K Visualizer</span>
+  </div>
+
+  <!-- Top Info Pills -->
+  <div id="top-bar">
+    <div class="pill" id="audio-status-pill">
+      <span class="status-dot" id="audio-status-dot"></span>
+      <span id="audio-status-text">Initializing Grand Piano…</span>
+    </div>
+    <div class="pill" id="song-pill" style="margin-right: 100px;">
+      <span id="song-title-text">No MIDI Loaded — Tap "Demo Song"</span>
+    </div>
+  </div>
+
+  <button id="toggle-ui-btn" title="Show / Hide Controls">
+    <span id="toggle-ui-icon">☰</span>
+    <span>Controls</span>
+  </button>
+
+  <!-- Floating Glassmorphism Control Dock -->
+  <div id="control-dock">
+    <!-- Scrubber -->
+    <div class="timeline-row">
+      <span class="time-label" id="current-time-label">0:00</span>
+      <input type="range" id="timeline-scrubber" min="0" max="100" step="0.01" value="0" />
+      <span class="time-label" id="total-time-label">0:00</span>
+    </div>
+
+    <!-- Main Action Row -->
+    <div class="controls-main">
+      <div class="btn-group">
+        <button class="btn btn-primary" id="play-pause-btn" disabled>▶ Play</button>
+        <button class="btn" id="restart-btn" disabled title="Restart">⏮</button>
+        <label class="btn" for="midi-file-input">📂 Upload MIDI</label>
+        <input type="file" id="midi-file-input" accept=".mid,.midi,audio/midi,audio/x-midi" />
+        <button class="btn" id="demo-btn">✨ Load Demo Song</button>
+      </div>
+
+      <div class="btn-group">
+        <select class="ctrl-select" id="speed-select" title="Playback Speed">
+          <option value="0.5">0.5× Speed</option>
+          <option value="0.75">0.75× Speed</option>
+          <option value="1" selected>1.0× Speed</option>
+          <option value="1.25">1.25× Speed</option>
+          <option value="1.5">1.5× Speed</option>
+        </select>
+
+        <select class="ctrl-select" id="export-res-select" title="Export Resolution">
+          <option value="4k60" selected>4K UHD · 60fps</option>
+          <option value="4k30">4K UHD · 30fps</option>
+          <option value="1080p60">1080p HD · 60fps</option>
+        </select>
+
+        <button class="btn btn-export" id="export-btn" disabled>⬇ Export 4K MP4</button>
+        <button class="btn" id="drawer-toggle-btn">⚙ Settings</button>
+      </div>
+    </div>
+
+    <!-- Collapsible Settings Drawer -->
+    <div id="settings-drawer" class="collapsed">
+      <div class="setting-item">
+        <div class="setting-header"><span>Virtual Hands</span></div>
+        <select class="ctrl-select" id="hand-style-select">
+          <option value="full" selected>Full Translucent Hands</option>
+          <option value="rings">Fingertip Rings Only</option>
+          <option value="hidden">Hidden</option>
+        </select>
+      </div>
+
+      <div class="setting-item">
+        <div class="setting-header">
+          <span>Hand Split</span>
+          <span class="val" id="split-val-label">Auto (Track)</span>
+        </div>
+        <div style="display:flex; gap:6px;">
+          <select class="ctrl-select" id="split-mode-select" style="flex:1; min-height:34px; padding:4px 8px;">
+            <option value="track" selected>Auto Track</option>
+            <option value="pitch">Pitch Split</option>
+          </select>
+          <input type="range" class="mini-slider" id="split-pitch-slider" min="48" max="72" step="1" value="60" style="width:76px; align-self:center; display:none;" />
+        </div>
+      </div>
+
+      <div class="setting-item">
+        <div class="setting-header">
+          <span>Glow Intensity</span>
+          <span class="val" id="glow-val">1.0×</span>
+        </div>
+        <input type="range" class="mini-slider" id="glow-slider" min="0.3" max="2.0" step="0.05" value="1.0" />
+      </div>
+
+      <div class="setting-item">
+        <div class="setting-header">
+          <span>Particle Sparks</span>
+          <span class="val" id="particle-val">1.0×</span>
+        </div>
+        <input type="range" class="mini-slider" id="particle-slider" min="0" max="2.2" step="0.1" value="1.0" />
+      </div>
+
+      <div class="setting-item">
+        <div class="setting-header">
+          <span>Note Fall Speed</span>
+          <span class="val" id="fall-speed-val">3.0s</span>
+        </div>
+        <input type="range" class="mini-slider" id="fall-speed-slider" min="1.4" max="5.5" step="0.1" value="3.0" />
+      </div>
+
+      <div class="setting-item">
+        <div class="setting-header">
+          <span>Hall Reverb</span>
+          <span class="val" id="reverb-val">18%</span>
+        </div>
+        <input type="range" class="mini-slider" id="reverb-slider" min="0" max="0.5" step="0.02" value="0.18" />
+      </div>
+
+      <div class="setting-item" style="grid-column: span 1;">
+        <div class="setting-header"><span>Hand Colors</span></div>
+        <div class="color-row">
+          <label class="color-chip">
+            <span>Right</span>
+            <input type="color" id="rh-color-picker" value="#00f3ff" />
+          </label>
+          <label class="color-chip">
+            <span>Left</span>
+            <input type="color" id="lh-color-picker" value="#ff00aa" />
+          </label>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Direct Offline 4K Export Modal -->
+  <div id="export-modal">
+    <div class="export-card">
+      <h3>
+        <span id="export-modal-title">Direct 4K Video Export</span>
+        <span class="export-badge" id="export-engine-badge">OFFLINE MP4</span>
+      </h3>
+      <div class="export-status-text" id="export-status-text">
+        Preparing offline studio piano render and 4K frame encoder…
+      </div>
+      <div class="progress-track">
+        <div class="progress-fill" id="export-progress-fill"></div>
+      </div>
+      <div class="export-meta">
+        <span id="export-percent-label">0%</span>
+        <span id="export-frame-label">Frame 0 / 0</span>
+        <span id="export-eta-label">ETA: --</span>
+      </div>
+      <div class="export-note" id="export-note">
+        Rendering deterministically offscreen (no live playback needed). Your browser will download the finished MP4 automatically once encoding finishes—keep this tab alive until 100%.
+      </div>
+      <div style="display:flex; justify-content:flex-end; gap:10px; margin-top:4px;">
+        <button class="btn" id="cancel-export-btn">Cancel Export</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    (() => {
+      'use strict';
+
+      /* ============================================================================
+         1. CONSTANTS, 88-KEY PIANO GEOMETRY & COLOR UTILITIES
+      ============================================================================ */
+      const MIN_MIDI = 21; // A0
+      const MAX_MIDI = 108; // C8
+      const TOTAL_KEYS = 88;
+      const BLACK_SEMITONES = new Set([1, 3, 6, 8, 10]); // C#, D#, F#, G#, A#
+      const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+
+      // Base reference coordinate space (1920x1080). 4K renders at 2.0x exact vector scale (3840x2160).
+      const BASE_W = 1920;
+      const BASE_H = 1080;
+      const KEYBOARD_H = 224;
+      const SABER_Y = BASE_H - KEYBOARD_H; // 856
+
+      function midiToName(midi) {
+        const octave = Math.floor(midi / 12) - 1;
+        return NOTE_NAMES[midi % 12] + octave;
+      }
+
+      function hexToRgb(hex) {
+        const clean = hex.replace('#', '');
+        const n = parseInt(clean.length === 3
+          ? clean.split('').map(c => c + c).join('')
+          : clean, 16);
+        return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+      }
+
+      function rgbaStr(rgb, a) {
+        return `rgba(${rgb.r},${rgb.g},${rgb.b},${a})`;
+      }
+
+      function drawRoundedRect(ctx, x, y, w, h, r) {
+        const radius = Math.min(r, w * 0.5, h * 0.5);
+        ctx.beginPath();
+        if (typeof ctx.roundRect === 'function') {
+          ctx.roundRect(x, y, w, h, radius);
+        } else {
+          ctx.moveTo(x + radius, y);
+          ctx.arcTo(x + w, y, x + w, y + h, radius);
+          ctx.arcTo(x + w, y + h, x, y + h, radius);
+          ctx.arcTo(x, y + h, x, y, radius);
+          ctx.arcTo(x, y, x + w, y, radius);
+          ctx.closePath();
+        }
+      }
+
+      // Build accurate 88-key geometry mapped onto BASE_W x KEYBOARD_H
+      function buildKeyboardLayout() {
+        const keys = [];
+        const whiteCount = 52;
+        const whiteW = BASE_W / whiteCount;
+        const blackW = whiteW * 0.61;
+        const blackH = KEYBOARD_H * 0.61;
+
+        let whiteIdx = 0;
+        for (let midi = MIN_MIDI; midi <= MAX_MIDI; midi++) {
+          const semitone = midi % 12;
+          const isBlack = BLACK_SEMITONES.has(semitone);
+          if (!isBlack) {
+            const x = whiteIdx * whiteW;
+            keys.push({
+              midi,
+              isBlack: false,
+              x,
+              w: whiteW,
+              h: KEYBOARD_H,
+              cx: x + whiteW * 0.5,
+              hitY: SABER_Y + KEYBOARD_H * 0.74
+            });
+            whiteIdx++;
+          } else {
+            // Slight anatomical piano offset per sharp key
+            let offsetShift = 0;
+            if (semitone === 1 || semitone === 6) offsetShift = -0.07;
+            if (semitone === 3 || semitone === 10) offsetShift = 0.07;
+            const x = whiteIdx * whiteW - blackW * 0.5 + offsetShift * whiteW;
+            keys.push({
+              midi,
+              isBlack: true,
+              x,
+              w: blackW,
+              h: blackH,
+              cx: x + blackW * 0.5,
+              hitY: SABER_Y + blackH * 0.74
+            });
+          }
+        }
+        const byMidi = new Map();
+        keys.forEach(k => byMidi.set(k.midi, k));
+        return { keys, byMidi, whiteW, blackW, blackH };
+      }
+
+      const KEYBOARD = buildKeyboardLayout();
+
+      /* ============================================================================
+         2. SALAMANDER GRAND PIANO WEB AUDIO ENGINE
+            - Loads real acoustic Salamander Grand Piano MP3 samples (30 notes, A0-C8)
+            - Unlimited polyphony (no dropped notes), sample-accurate lookahead scheduler
+            - Proper MIDI CC64 sustain pedal + realistic 0.22s damper release
+            - Supports BOTH real-time playback AND OfflineAudioContext rendering for 4K MP4
+      ============================================================================ */
+      const SALAMANDER_BASE_URL = 'https://tonejs.github.io/audio/salamander/';
+      const SALAMANDER_MAP = [
+        { midi: 21, file: 'A0.mp3' },
+        { midi: 24, file: 'C1.mp3' },
+        { midi: 27, file: 'Ds1.mp3' },
+        { midi: 30, file: 'Fs1.mp3' },
+        { midi: 33, file: 'A1.mp3' },
+        { midi: 36, file: 'C2.mp3' },
+        { midi: 39, file: 'Ds2.mp3' },
+        { midi: 42, file: 'Fs2.mp3' },
+        { midi: 45, file: 'A2.mp3' },
+        { midi: 48, file: 'C3.mp3' },
+        { midi: 51, file: 'Ds3.mp3' },
+        { midi: 54, file: 'Fs3.mp3' },
+        { midi: 57, file: 'A3.mp3' },
+        { midi: 60, file: 'C4.mp3' },
+        { midi: 63, file: 'Ds4.mp3' },
+        { midi: 66, file: 'Fs4.mp3' },
+        { midi: 69, file: 'A4.mp3' },
+        { midi: 72, file: 'C5.mp3' },
+        { midi: 75, file: 'Ds5.mp3' },
+        { midi: 78, file: 'Fs5.mp3' },
+        { midi: 81, file: 'A5.mp3' },
+        { midi: 84, file: 'C6.mp3' },
+        { midi: 87, file: 'Ds6.mp3' },
+        { midi: 90, file: 'Fs6.mp3' },
+        { midi: 93, file: 'A6.mp3' },
+        { midi: 96, file: 'C7.mp3' },
+        { midi: 99, file: 'Ds7.mp3' },
+        { midi: 102, file: 'Fs7.mp3' },
+        { midi: 105, file: 'A7.mp3' },
+        { midi: 108, file: 'C8.mp3' }
+      ];
+
+      class SalamanderPianoEngine {
+        constructor() {
+          this.ctx = null;
+          this.masterGain = null;
+          this.compressor = null;
+          this.dryGain = null;
+          this.wetGain = null;
+          this.convolver = null;
+
+          // Raw ArrayBuffers retained so OfflineAudioContext can decode clean copies during 4K export
+          this.rawSamples = new Map(); // midi -> ArrayBuffer
+          this.decodedSamples = new Map(); // midi -> AudioBuffer (for live AudioContext)
+          this.availableMidis = [];
+          this.isSampled = false;
+          this.isLoaded = false;
+          this.loadingPromise = null;
+          this.reverbMix = 0.18;
+
+          // Active voices tracked per MIDI pitch for clean re-strike damping and instant stopAll()
+          this.activeVoices = new Set();
+          this.voicesByMidi = new Map();
+        }
+
+        ensureContext() {
+          if (!this.ctx) {
+            const AC = window.AudioContext || window.webkitAudioContext;
+            this.ctx = new AC({ latencyHint: 'interactive' });
+            this._buildMasterBus(this.ctx, true);
+          }
+          if (this.ctx.state === 'suspended') {
+            this.ctx.resume().catch(() => {});
+          }
+          return this.ctx;
+        }
+
+        _buildMasterBus(audioCtx, isLive) {
+          const compressor = audioCtx.createDynamicsCompressor();
+          compressor.threshold.value = -10;
+          compressor.knee.value = 18;
+          compressor.ratio.value = 3.2;
+          compressor.attack.value = 0.004;
+          compressor.release.value = 0.18;
+
+          const masterGain = audioCtx.createGain();
+          masterGain.gain.value = 0.92;
+
+          const dryGain = audioCtx.createGain();
+          dryGain.gain.value = 1.0 - this.reverbMix * 0.35;
+
+          const wetGain = audioCtx.createGain();
+          wetGain.gain.value = this.reverbMix;
+
+          const convolver = audioCtx.createConvolver();
+          convolver.buffer = this._createHallImpulse(audioCtx, 2.35, 2.8);
+
+          dryGain.connect(compressor);
+          wetGain.connect(convolver);
+          convolver.connect(compressor);
+          compressor.connect(masterGain);
+          masterGain.connect(audioCtx.destination);
+
+          if (isLive) {
+            this.compressor = compressor;
+            this.masterGain = masterGain;
+            this.dryGain = dryGain;
+            this.wetGain = wetGain;
+            this.convolver = convolver;
+          }
+
+          return { dryGain, wetGain, masterGain };
+        }
+
+        // Synthesize a smooth stereo concert-hall impulse response (zero external IR download needed)
+        _createHallImpulse(audioCtx, durationSec, decay) {
+          const rate = audioCtx.sampleRate;
+          const length = Math.floor(rate * durationSec);
+          const impulse = audioCtx.createBuffer(2, length, rate);
+          for (let ch = 0; ch < 2; ch++) {
+            const data = impulse.getChannelData(ch);
+            let lp = 0;
+            for (let i = 0; i < length; i++) {
+              const t = i / length;
+              const env = Math.pow(1 - t, decay) * (i < rate * 0.015 ? i / (rate * 0.015) : 1);
+              // Gentle low-pass filtering for warm wooden hall tail
+              const white = Math.random() * 2 - 1;
+              lp = lp * 0.72 + white * 0.28;
+              data[i] = lp * env * 0.55;
+            }
+          }
+          return impulse;
+        }
+
+        setReverbMix(mix) {
+          this.reverbMix = Math.max(0, Math.min(0.6, mix));
+          if (this.wetGain && this.dryGain && this.ctx) {
+            const now = this.ctx.currentTime;
+            this.wetGain.gain.setTargetAtTime(this.reverbMix, now, 0.03);
+            this.dryGain.gain.setTargetAtTime(1.0 - this.reverbMix * 0.35, now, 0.03);
+          }
+        }
+
+        // Load all 30 Salamander Grand Piano samples in parallel batches
+        async loadSamples(onProgress) {
+          if (this.loadingPromise) return this.loadingPromise;
+          this.loadingPromise = (async () => {
+            const total = SALAMANDER_MAP.length;
+            let fetched = 0;
+
+            const fetchOne = async (entry) => {
+              const res = await fetch(SALAMANDER_BASE_URL + entry.file, { mode: 'cors' });
+              if (!res.ok) throw new Error(`HTTP ${res.status}`);
+              const arrBuf = await res.arrayBuffer();
+              this.rawSamples.set(entry.midi, arrBuf);
+              fetched++;
+              if (onProgress) onProgress(fetched, total, false);
+            };
+
+            try {
+              // Fetch with concurrency of 6 to keep Safari happy and fast
+              const queue = [...SALAMANDER_MAP];
+              const workers = Array.from({ length: 6 }, async () => {
+                while (queue.length > 0) {
+                  const item = queue.shift();
+                  try {
+                    await fetchOne(item);
+                  } catch (e) {
+                    // Retry once
+                    try { await fetchOne(item); } catch (_) {}
+                  }
+                }
+              });
+              await Promise.all(workers);
+
+              if (this.rawSamples.size >= 10) {
+                this.isSampled = true;
+                this.availableMidis = Array.from(this.rawSamples.keys()).sort((a, b) => a - b);
+                this.isLoaded = true;
+                if (this.ctx) {
+                  await this._decodeAllForContext(this.ctx, this.decodedSamples);
+                }
+                if (onProgress) onProgress(this.rawSamples.size, total, true, true);
+              } else {
+                throw new Error('Too few samples fetched');
+              }
+            } catch (err) {
+              console.warn('Salamander fetch failed, switching to harmonic piano synth fallback:', err);
+              this.isSampled = false;
+              this.isLoaded = true;
+              if (onProgress) onProgress(0, total, true, false);
+            }
+          })();
+          return this.loadingPromise;
+        }
+
+        async ensureDecodedForLive() {
+          const ctx = this.ensureContext();
+          if (this.isSampled && this.decodedSamples.size < this.rawSamples.size) {
+            await this._decodeAllForContext(ctx, this.decodedSamples);
+          } else if (!this.isSampled && this.decodedSamples.size === 0) {
+            this._buildHarmonicFallbackBank(ctx, this.decodedSamples);
+            this.availableMidis = Array.from(this.decodedSamples.keys()).sort((a, b) => a - b);
+          }
+        }
+
+        async _decodeAllForContext(audioCtx, targetMap) {
+          const entries = Array.from(this.rawSamples.entries());
+          await Promise.all(entries.map(async ([midi, rawBuf]) => {
+            if (targetMap.has(midi)) return;
+            try {
+              const copy = rawBuf.slice(0);
+              const decoded = await audioCtx.decodeAudioData(copy);
+              targetMap.set(midi, decoded);
+            } catch (e) {
+              console.warn(`Failed to decode sample MIDI ${midi}`, e);
+            }
+          }));
+          this.availableMidis = Array.from(targetMap.keys()).sort((a, b) => a - b);
+        }
+
+        // Warm harmonic piano fallback if user is completely offline (NOT harsh beeps)
+        _buildHarmonicFallbackBank(audioCtx, targetMap) {
+          const rate = audioCtx.sampleRate;
+          const dur = 3.2;
+          const len = Math.floor(rate * dur);
+          const anchorMidis = [24, 36, 48, 60, 72, 84, 96];
+
+          for (const midi of anchorMidis) {
+            const freq = 440 * Math.pow(2, (midi - 69) / 12);
+            const buf = audioCtx.createBuffer(1, len, rate);
+            const ch = buf.getChannelData(0);
+            const harmonics = [1, 2, 3, 4, 5, 6, 7];
+            const amps = [1.0, 0.42, 0.24, 0.14, 0.08, 0.04, 0.02];
+
+            for (let i = 0; i < len; i++) {
+              const t = i / rate;
+              const attack = Math.min(1, t / 0.005);
+              let sample = 0;
+              for (let h = 0; h < harmonics.length; h++) {
+                const n = harmonics[h];
+                if (freq * n > rate * 0.42) break;
+                // Slight string inharmonicity + faster upper harmonic decay
+                const inh = Math.sqrt(1 + 0.00018 * n * n);
+                const hDecay = Math.exp(-t * (1.35 + h * 0.95));
+                sample += Math.sin(2 * Math.PI * freq * n * inh * t) * amps[h] * hDecay;
+              }
+              // Soft felt hammer transient
+              if (t < 0.014) {
+                sample += (Math.random() * 2 - 1) * Math.exp(-t * 280) * 0.14;
+              }
+              ch[i] = sample * attack * 0.32;
+            }
+            targetMap.set(midi, buf);
+          }
+        }
+
+        _findNearestSample(midi, bufferMap) {
+          let bestMidi = this.availableMidis[0];
+          let minDiff = Math.abs(midi - bestMidi);
+          for (let i = 1; i < this.availableMidis.length; i++) {
+            const m = this.availableMidis[i];
+            const diff = Math.abs(midi - m);
+            if (diff < minDiff) {
+              minDiff = diff;
+              bestMidi = m;
+            }
+          }
+          return {
+            sampleMidi: bestMidi,
+            buffer: bufferMap.get(bestMidi),
+            playbackRate: Math.pow(2, (midi - bestMidi) / 12)
+          };
+        }
+
+        /**
+         * Schedule a single acoustic piano note on either the live AudioContext or an OfflineAudioContext.
+         * Implements proper note-off damping (0.22s felt damper) and velocity-sensitive tonal warmth.
+         */
+        scheduleNote(audioCtx, bus, bufferMap, midi, startTime, audioDuration, velocity, trackLive = false) {
+          if (!bufferMap || bufferMap.size === 0) return;
+          const clampedMidi = Math.max(MIN_MIDI, Math.min(MAX_MIDI, Math.round(midi)));
+          const sample = this._findNearestSample(clampedMidi, bufferMap);
+          if (!sample.buffer) return;
+
+          const now = audioCtx.currentTime;
+          const t0 = Math.max(now, startTime);
+
+          // Musical velocity curve (soft notes gentler, fortissimo rich without clipping)
+          const vel = Math.max(0.06, Math.min(1.0, velocity || 0.72));
+          const gainPeak = Math.pow(vel, 1.38) * 0.78;
+
+          // Natural piano release: higher notes have shorter natural resonance, damper takes ~0.22s
+          const damperRelease = clampedMidi >= 88 ? 0.34 : 0.22;
+          const holdDur = Math.max(0.055, Math.min(audioDuration, 6.5));
+          const releaseStart = t0 + holdDur;
+          const stopTime = releaseStart + damperRelease + 0.04;
+
+          const src = audioCtx.createBufferSource();
+          src.buffer = sample.buffer;
+          src.playbackRate.setValueAtTime(sample.playbackRate, t0);
+
+          // Velocity-sensitive tone filter (softer strikes = warmer felt tone)
+          const filter = audioCtx.createBiquadFilter();
+          filter.type = 'lowpass';
+          const cutoff = 1600 + Math.pow(vel, 1.2) * 14500;
+          filter.frequency.setValueAtTime(Math.min(18000, cutoff), t0);
+          filter.Q.value = 0.5;
+
+          const env = audioCtx.createGain();
+          env.gain.setValueAtTime(0.0001, t0);
+          env.gain.linearRampToValueAtTime(gainPeak, t0 + 0.004);
+          // Subtle natural sustain curve during hold, then crisp felt-damper release
+          env.gain.setValueAtTime(gainPeak, releaseStart);
+          env.gain.exponentialRampToValueAtTime(0.0001, releaseStart + damperRelease);
+
+          src.connect(filter);
+          filter.connect(env);
+          env.connect(bus.dryGain);
+          env.connect(bus.wetGain);
+
+          // Live same-key re-strike damping (prevents muddy note stacking on repeated keys)
+          if (trackLive) {
+            const prevVoice = this.voicesByMidi.get(clampedMidi);
+            if (prevVoice && prevVoice.releaseStart > t0) {
+              try {
+                prevVoice.env.gain.cancelScheduledValues(t0);
+                prevVoice.env.gain.setValueAtTime(Math.max(0.0002, prevVoice.gainPeak * 0.5), t0);
+                prevVoice.env.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.055);
+                prevVoice.src.stop(t0 + 0.065);
+              } catch (_) {}
+            }
+          }
+
+          src.start(t0);
+          src.stop(stopTime);
+
+          if (trackLive) {
+            const voice = { src, env, gainPeak, releaseStart, midi: clampedMidi };
+            this.activeVoices.add(voice);
+            this.voicesByMidi.set(clampedMidi, voice);
+            src.onended = () => {
+              this.activeVoices.delete(voice);
+              if (this.voicesByMidi.get(clampedMidi) === voice) {
+                this.voicesByMidi.delete(clampedMidi);
+              }
+            };
+          }
+        }
+
+        scheduleLiveNote(midi, startTime, audioDuration, velocity) {
+          if (!this.ctx || !this.dryGain) return;
+          this.scheduleNote(
+            this.ctx,
+            { dryGain: this.dryGain, wetGain: this.wetGain },
+            this.decodedSamples,
+            midi,
+            startTime,
+            audioDuration,
+            velocity,
+            true
+          );
+        }
+
+        stopAllLive() {
+          if (!this.ctx) return;
+          const now = this.ctx.currentTime;
+          for (const v of this.activeVoices) {
+            try {
+              v.env.gain.cancelScheduledValues(now);
+              v.env.gain.setValueAtTime(Math.max(0.0002, v.env.gain.value || 0.05), now);
+              v.env.gain.exponentialRampToValueAtTime(0.0001, now + 0.05);
+              v.src.stop(now + 0.06);
+            } catch (_) {}
+          }
+          this.activeVoices.clear();
+          this.voicesByMidi.clear();
+        }
+
+        /**
+         * Renders the entire song into a studio-grade stereo AudioBuffer using OfflineAudioContext
+         * (executes faster than real time for direct 4K MP4 export!)
+         */
+        async renderOfflineTrack(notes, totalDurationSec, playbackSpeed, sampleRate = 48000, onProgress) {
+          const totalSamples = Math.ceil(totalDurationSec * sampleRate);
+          const OfflineAC = window.OfflineAudioContext || window.webkitOfflineAudioContext;
+          const offlineCtx = new OfflineAC(2, totalSamples, sampleRate);
+          const bus = this._buildMasterBus(offlineCtx, false);
+
+          const offlineBuffers = new Map();
+          if (this.isSampled && this.rawSamples.size > 0) {
+            await this._decodeAllForContext(offlineCtx, offlineBuffers);
+          } else {
+            this._buildHarmonicFallbackBank(offlineCtx, offlineBuffers);
+          }
+
+          if (onProgress) onProgress(0.25);
+
+          const speed = playbackSpeed || 1.0;
+          for (let i = 0; i < notes.length; i++) {
+            const n = notes[i];
+            const tStart = (n.time / speed) + 0.05; // 50ms lead-in pad
+            const dur = n.audioDuration / speed;
+            this.scheduleNote(offlineCtx, bus, offlineBuffers, n.midi, tStart, dur, n.velocity, false);
+          }
+
+          if (onProgress) onProgress(0.45);
+          const renderedBuffer = await offlineCtx.startRendering();
+          if (onProgress) onProgress(1.0);
+          return renderedBuffer;
+        }
+      }
+
+      const piano = new SalamanderPianoEngine();
+
+      /* ============================================================================
+         3. MIDI PARSER, SUSTAIN PEDAL RESOLVER & BUILT-IN DEMO COMPOSER
+      ============================================================================ */
+      const songState = {
+        title: '',
+        rawNotes: [], // { midi, time, duration, audioDuration, velocity, trackIdx, hand }
+        duration: 0,
+        trackCount: 1,
+        hasMultiTrack: false
+      };
+
+      function resolveHandAssignments(notes, mode, splitPitch, hasMultiTrack) {
+        if (mode === 'track' && hasMultiTrack) {
+          // Determine average pitch of top two tracks to ensure higher register = Right Hand
+          const trackStats = new Map();
+          for (const n of notes) {
+            if (!trackStats.has(n.trackIdx)) trackStats.set(n.trackIdx, { sum: 0, count: 0 });
+            const s = trackStats.get(n.trackIdx);
+            s.sum += n.midi;
+            s.count++;
+          }
+          const sortedTracks = Array.from(trackStats.entries())
+            .sort((a, b) => (b[1].sum / b[1].count) - (a[1].sum / a[1].count));
+          const rightTrackIdx = sortedTracks[0][0];
+
+          for (const n of notes) {
+            n.hand = (n.trackIdx === rightTrackIdx) ? 'R' : 'L';
+          }
+        } else {
+          for (const n of notes) {
+            n.hand = (n.midi >= splitPitch) ? 'R' : 'L';
+          }
+        }
+      }
+
+      function computeAudioDurationsWithSustain(notes, sustainEvents) {
+        // sustainEvents: sorted [{ time, down: boolean }]
+        if (!sustainEvents || sustainEvents.length === 0) {
+          for (const n of notes) n.audioDuration = n.duration;
+          return;
+        }
+        sustainEvents.sort((a, b) => a.time - b.time);
+
+        for (const n of notes) {
+          const noteOff = n.time + n.duration;
+          let pedalDownAtOff = false;
+          let idx = 0;
+
+          while (idx < sustainEvents.length && sustainEvents[idx].time <= noteOff) {
+            pedalDownAtOff = sustainEvents[idx].down;
+            idx++;
+          }
+
+          if (!pedalDownAtOff) {
+            n.audioDuration = n.duration;
+          } else {
+            // Find next pedal-up event
+            let releaseTime = noteOff;
+            while (idx < sustainEvents.length) {
+              if (!sustainEvents[idx].down) {
+                releaseTime = sustainEvents[idx].time;
+                break;
+              }
+              idx++;
+            }
+            if (releaseTime <= noteOff) {
+              // Pedal stayed down until track end; cap reasonably
+              releaseTime = noteOff + 2.2;
+            }
+            n.audioDuration = Math.min(n.duration + 4.8, Math.max(n.duration, releaseTime - n.time));
+          }
+        }
+      }
+
+      function loadParsedMidiObject(midiObj, title) {
+        const extracted = [];
+        const allSustain = [];
+        let activeTrackCounter = 0;
+
+        midiObj.tracks.forEach((track) => {
+          // Skip percussion channels (GM channel 9)
+          if (track.instrument && track.instrument.percussion) return;
+          if (!track.notes || track.notes.length === 0) return;
+
+          const tIdx = activeTrackCounter++;
+
+          // Gather CC64 sustain pedal events
+          const cc64 = track.controlChanges && (track.controlChanges[64] || track.controlChanges['64']);
+          if (Array.isArray(cc64)) {
+            for (const cc of cc64) {
+              allSustain.push({ time: cc.time, down: cc.value >= 0.5 });
+            }
+          }
+
+          for (const n of track.notes) {
+            if (n.midi < MIN_MIDI || n.midi > MAX_MIDI) continue;
+            extracted.push({
+              midi: n.midi,
+              time: n.time,
+              duration: Math.max(0.05, n.duration),
+              audioDuration: Math.max(0.05, n.duration),
+              velocity: Math.max(0.1, Math.min(1.0, n.velocity || 0.72)),
+              trackIdx: tIdx,
+              hand: 'R'
+            });
+          }
+        });
+
+        extracted.sort((a, b) => a.time - b.time || a.midi - b.midi);
+        computeAudioDurationsWithSustain(extracted, allSustain);
+
+        const maxEnd = extracted.reduce((m, n) => Math.max(m, n.time + Math.max(n.duration, n.audioDuration * 0.45)), 0);
+        songState.title = title || midiObj.name || 'Untitled MIDI';
+        songState.rawNotes = extracted;
+        songState.duration = Math.max(1, maxEnd + 1.6);
+        songState.trackCount = activeTrackCounter;
+        songState.hasMultiTrack = activeTrackCounter >= 2;
+
+        resolveHandAssignments(
+          songState.rawNotes,
+          settings.splitMode,
+          settings.splitPitch,
+          songState.hasMultiTrack
+        );
+
+        resetPlaybackToStart();
+        updateSongUI();
+      }
+
+      // Built-in Cinematic Piano Demo Song ("Nocturne in D Minor" — expressive 2-hand piece with CC64 pedal)
+      function generateDemoSong() {
+        const notes = [];
+        const sustain = [];
+        const beat = 60 / 82; // 82 BPM expressive ballad feel
+
+        function addNote(midi, beatStart, beatDur, vel, trackIdx) {
+          notes.push({
+            midi,
+            time: beatStart * beat + 0.8,
+            duration: beatDur * beat,
+            audioDuration: beatDur * beat,
+            velocity: vel,
+            trackIdx,
+            hand: trackIdx === 0 ? 'R' : 'L'
+          });
+        }
+
+        function addPedal(beatDown, beatUp) {
+          sustain.push({ time: beatDown * beat + 0.8, down: true });
+          sustain.push({ time: beatUp * beat + 0.8, down: false });
+        }
+
+        // Progression: Dm9 -> BbMaj7 -> F -> Csus4/C -> Gm7 -> Dm/F -> Asus4 -> A7 -> Dm9 (climax + coda)
+        const bars = [
+          // Section A: Delicate arpeggios
+          { lh: [38, 45, 50, 52, 57, 52, 50, 45], rh: [[69, 0, 2.0, 0.72], [72, 2.0, 1.0, 0.78], [74, 3.0, 1.0, 0.82]] },
+          { lh: [34, 41, 46, 50, 53, 50, 46, 41], rh: [[72, 0, 1.5, 0.76], [69, 1.5, 0.5, 0.68], [67, 2.0, 2.0, 0.74]] },
+          { lh: [41, 48, 53, 57, 60, 57, 53, 48], rh: [[65, 0, 1.0, 0.70], [67, 1.0, 1.0, 0.74], [69, 2.0, 1.5, 0.82], [72, 3.5, 0.5, 0.74]] },
+          { lh: [36, 43, 48, 52, 55, 52, 48, 43], rh: [[67, 0, 2.5, 0.72], [65, 2.5, 0.5, 0.66], [64, 3.0, 1.0, 0.68]] },
+
+          // Section B: Emotional swell with octaves & harmonies
+          { lh: [38, 45, 50, 53, 57, 53, 50, 45], rh: [[62, 0, 0.5, 0.68], [65, 0.5, 0.5, 0.74], [69, 1.0, 1.0, 0.84], [74, 2.0, 1.5, 0.90], [76, 3.5, 0.5, 0.86]] },
+          { lh: [34, 41, 46, 50, 53, 57, 53, 50], rh: [[77, 0, 1.5, 0.92], [76, 1.5, 0.5, 0.84], [74, 2.0, 1.0, 0.86], [72, 3.0, 1.0, 0.82]] },
+          { lh: [31, 38, 43, 46, 50, 55, 50, 46], rh: [[70, 0, 1.0, 0.80], [69, 1.0, 1.0, 0.78], [67, 2.0, 1.0, 0.76], [69, 3.0, 1.0, 0.82]] },
+          { lh: [33, 40, 45, 49, 52, 57, 52, 49], rh: [[69, 0, 2.0, 0.84], [73, 2.0, 1.0, 0.88], [76, 3.0, 1.0, 0.90]] },
+
+          // Section C: Soaring Rousseau-style octave climax
+          { lh: [26, 38, 45, 50, 53, 57, 53, 50], rh: [[74, 0, 1.5, 0.92], [86, 0, 1.5, 0.92], [76, 1.5, 0.5, 0.85], [88, 1.5, 0.5, 0.85], [77, 2.0, 1.5, 0.95], [89, 2.0, 1.5, 0.95], [76, 3.5, 0.5, 0.84], [88, 3.5, 0.5, 0.84]] },
+          { lh: [34, 41, 46, 50, 53, 58, 53, 50], rh: [[74, 0, 1.5, 0.90], [86, 0, 1.5, 0.90], [72, 1.5, 0.5, 0.82], [84, 1.5, 0.5, 0.82], [69, 2.0, 2.0, 0.86], [81, 2.0, 2.0, 0.86]] },
+          { lh: [31, 38, 43, 46, 50, 55, 50, 46], rh: [[67, 0, 1.0, 0.80], [79, 0, 1.0, 0.80], [69, 1.0, 1.0, 0.82], [81, 1.0, 1.0, 0.82], [70, 2.0, 1.0, 0.86], [82, 2.0, 1.0, 0.86], [69, 3.0, 1.0, 0.82], [81, 3.0, 1.0, 0.82]] },
+          { lh: [33, 40, 45, 49, 52, 55, 52, 49], rh: [[64, 0, 1.5, 0.78], [76, 0, 1.5, 0.78], [67, 1.5, 0.5, 0.74], [69, 2.0, 1.0, 0.78], [73, 3.0, 1.0, 0.80]] },
+
+          // Resolution Coda (ritardando feel)
+          { lh: [26, 38, 45, 50, 57, 62, 57, 50], rh: [[74, 0, 2.5, 0.76], [69, 0.05, 2.45, 0.64], [72, 2.5, 0.5, 0.68], [69, 3.0, 1.0, 0.66]] },
+          { lh: [26, 38, 45, 50], rh: [[62, 0, 3.6, 0.68], [65, 0.06, 3.54, 0.62], [69, 0.12, 3.48, 0.66], [74, 0.18, 3.42, 0.72]] }
+        ];
+
+        bars.forEach((bar, bIdx) => {
+          const barStart = bIdx * 4;
+          addPedal(barStart + 0.04, barStart + 3.88);
+
+          // Left hand flowing 8th-note arpeggio (or lush chord on final bar)
+          if (bIdx === bars.length - 1) {
+            bar.lh.forEach((m, i) => addNote(m, barStart + i * 0.08, 3.7 - i * 0.08, 0.64 - i * 0.04, 1));
+          } else {
+            bar.lh.forEach((m, i) => {
+              const vel = i === 0 ? 0.74 : 0.52 + (i % 4) * 0.04;
+              addNote(m, barStart + i * 0.5, 0.48, vel, 1);
+            });
+          }
+
+          // Right hand melody
+          bar.rh.forEach(([m, offset, dur, vel]) => {
+            addNote(m, barStart + offset, dur, vel, 0);
+          });
+        });
+
+        notes.sort((a, b) => a.time - b.time || a.midi - b.midi);
+        computeAudioDurationsWithSustain(notes, sustain);
+
+        const maxEnd = notes.reduce((m, n) => Math.max(m, n.time + n.duration), 0);
+        songState.title = 'Nocturne in D Minor (Built-In Demo)';
+        songState.rawNotes = notes;
+        songState.duration = maxEnd + 2.2;
+        songState.trackCount = 2;
+        songState.hasMultiTrack = true;
+
+        resolveHandAssignments(songState.rawNotes, settings.splitMode, settings.splitPitch, true);
+        resetPlaybackToStart();
+        updateSongUI();
+      }
+
+      /* ============================================================================
+         4. VISUAL SETTINGS & SIMULATION STATE (Particles + Virtual Hand Kinematics)
+      ============================================================================ */
+      const settings = {
+        glowIntensity: 1.0,
+        particleDensity: 1.0,
+        fallDuration: 3.0, // seconds visible from top of canvas to Saber line
+        handStyle: 'full', // 'full' | 'rings' | 'hidden'
+        splitMode: 'track', // 'track' | 'pitch'
+        splitPitch: 60,     // Middle C
+        rhColor: '#00f3ff',
+        lhColor: '#ff00aa',
+        playbackSpeed: 1.0
+      };
+
+      function createHandState(side) {
+        const startX = side === 'L' ? BASE_W * 0.34 : BASE_W * 0.66;
+        return {
+          side,
+          x: startX,
+          vx: 0,
+          y: SABER_Y + 128,
+          alpha: 0,
+          // 5 fingers: index 0=Thumb, 1=Index, 2=Middle, 3=Ring, 4=Pinky
+          fingers: Array.from({ length: 5 }, (_, i) => ({
+            x: startX + (side === 'R' ? (i - 2) * 32 : (2 - i) * 32),
+            y: SABER_Y + 72,
+            press: 0,
+            activeMidi: null
+          }))
+        };
+      }
+
+      function createSimState() {
+        return {
+          particles: [],
+          keyEnergy: new Float32Array(128),     // 0..1 smooth LED glow per MIDI key
+          keyColorHand: new Array(128).fill('R'),
+          keyPressDepth: new Float32Array(128), // 0..1 physical depression
+          triggeredNoteSet: new Set(),
+          lastTime: -1,
+          hands: {
+            L: createHandState('L'),
+            R: createHandState('R')
+          }
+        };
+      }
+
+      let liveSim = createSimState();
+
+      function resetSimState(sim) {
+        sim.particles.length = 0;
+        sim.keyEnergy.fill(0);
+        sim.keyPressDepth.fill(0);
+        sim.triggeredNoteSet.clear();
+        sim.lastTime = -1;
+        sim.hands.L = createHandState('L');
+        sim.hands.R = createHandState('R');
+      }
+
+      /* ============================================================================
+         5. PARTICLE ENGINE & VIRTUAL HAND KINEMATICS
+      ============================================================================ */
+      function spawnNoteSparks(sim, keyObj, rgb, velocity, isImpactBurst) {
+        const density = settings.particleDensity;
+        if (density <= 0.01) return;
+
+        const baseCount = isImpactBurst
+          ? Math.round((8 + velocity * 10) * density)
+          : Math.round((1 + velocity * 1.4) * density);
+
+        const maxParticles = 950;
+        for (let i = 0; i < baseCount; i++) {
+          if (sim.particles.length >= maxParticles) {
+            sim.particles.shift();
+          }
+          const angle = -Math.PI * 0.5 + (Math.random() - 0.5) * (isImpactBurst ? 1.55 : 0.9);
+          const speed = (isImpactBurst ? 110 + Math.random() * 290 : 55 + Math.random() * 140) * (0.7 + velocity * 0.5);
+          sim.particles.push({
+            x: keyObj.cx + (Math.random() - 0.5) * keyObj.w * 0.72,
+            y: SABER_Y - 1 + (Math.random() - 0.5) * 4,
+            vx: Math.cos(angle) * speed,
+            vy: Math.sin(angle) * speed,
+            size: isImpactBurst ? (1.8 + Math.random() * 3.8) : (1.2 + Math.random() * 2.2),
+            life: 1.0,
+            decay: isImpactBurst ? (0.85 + Math.random() * 0.95) : (1.2 + Math.random() * 1.1),
+            r: rgb.r,
+            g: rgb.g,
+            b: rgb.b,
+            hot: Math.random() > 0.62
+          });
+        }
+      }
+
+      function updateHandKinematics(hand, activeHandNotes, upcomingHandNotes, dt) {
+        const isRight = hand.side === 'R';
+        const hasActivity = activeHandNotes.length > 0 || upcomingHandNotes.length > 0;
+
+        // Smooth fade in/out when a hand is idle for long stretches
+        const targetAlpha = hasActivity ? 1.0 : 0.22;
+        hand.alpha += (targetAlpha - hand.alpha) * Math.min(1, dt * 4.5);
+
+        // Compute target centroid X using active notes + look-ahead notes
+        let targetX = hand.x;
+        if (activeHandNotes.length > 0) {
+          let sum = 0;
+          for (const n of activeHandNotes) {
+            const k = KEYBOARD.byMidi.get(n.midi);
+            if (k) sum += k.cx;
+          }
+          targetX = sum / activeHandNotes.length;
+        } else if (upcomingHandNotes.length > 0) {
+          // Anticipate upcoming notes so the hand glides gracefully before impact
+          let weightedSum = 0;
+          let weightTotal = 0;
+          for (const item of upcomingHandNotes) {
+            const k = KEYBOARD.byMidi.get(item.note.midi);
+            if (!k) continue;
+            const w = Math.max(0.15, 1.0 - item.timeUntil / 0.85);
+            weightedSum += k.cx * w;
+            weightTotal += w;
+          }
+          if (weightTotal > 0) targetX = weightedSum / weightTotal;
+        }
+
+        // Critically damped spring physics (smooth gliding, zero teleporting)
+        const stiffness = 68;
+        const damping = 15.2;
+        const acc = (targetX - hand.x) * stiffness - hand.vx * damping;
+        hand.vx += acc * dt;
+        hand.x += hand.vx * dt;
+        hand.x = Math.max(90, Math.min(BASE_W - 90, hand.x));
+
+        // Assign active notes to the 5 fingers (by pitch order: L pinky->thumb, R thumb->pinky)
+        const sortedActive = [...activeHandNotes].sort((a, b) => a.midi - b.midi);
+        const fingerTargets = new Array(5).fill(null);
+
+        if (sortedActive.length > 0) {
+          const count = sortedActive.length;
+          // Choose natural anatomical finger indices based on chord size
+          const slotPresets = {
+            1: [2],                 // Middle / Index
+            2: [0, 3],              // Thumb + Ring
+            3: [0, 2, 4],           // Thumb + Middle + Pinky
+            4: [0, 1, 3, 4],        // Thumb + Index + Ring + Pinky
+            5: [0, 1, 2, 3, 4]
+          };
+          const slots = slotPresets[Math.min(5, count)];
+          for (let i = 0; i < Math.min(5, count); i++) {
+            const note = sortedActive[i];
+            const k = KEYBOARD.byMidi.get(note.midi);
+            if (!k) continue;
+            // Right hand: ascending pitch maps 0(thumb)->4(pinky)
+            // Left hand: ascending pitch maps 4(pinky)->0(thumb)
+            const fIdx = isRight ? slots[i] : (4 - slots[i]);
+            fingerTargets[fIdx] = { x: k.cx, y: k.hitY, midi: note.midi };
+          }
+        }
+
+        // Natural resting finger fan offsets relative to palm center
+        const restOffsets = isRight
+          ? [-66, -30, 4, 38, 70]  // Thumb on left -> Pinky on right
+          : [66, 30, -4, -38, -70]; // Thumb on right -> Pinky on left
+        const restYOffsets = [56, 20, 10, 22, 44];
+
+        const lerpRate = Math.min(1, dt * 19);
+        for (let f = 0; f < 5; f++) {
+          const finger = hand.fingers[f];
+          const target = fingerTargets[f];
+          if (target) {
+            finger.x += (target.x - finger.x) * lerpRate;
+            finger.y += (target.y - finger.y) * lerpRate;
+            finger.press += (1.0 - finger.press) * Math.min(1, dt * 24);
+            finger.activeMidi = target.midi;
+          } else {
+            const rx = hand.x + restOffsets[f];
+            const ry = SABER_Y + 56 + restYOffsets[f] * 0.45;
+            finger.x += (rx - finger.x) * Math.min(1, dt * 11);
+            finger.y += (ry - finger.y) * Math.min(1, dt * 11);
+            finger.press += (0.0 - finger.press) * Math.min(1, dt * 14);
+            finger.activeMidi = null;
+          }
+        }
+      }
+
+      /* ============================================================================
+         6. CINEMATIC 2D CANVAS RENDERER (Rousseau / SeeMusic Glow + Procedural Hands)
+            Works identically at 1920x1080 (Live) AND 3840x2160 (4K Export)!
+      ============================================================================ */
+      function renderSceneFrame(ctx, canvasW, canvasH, currentTime, dt, sim, notes) {
+        const scale = canvasW / BASE_W;
+        const rhRgb = hexToRgb(settings.rhColor);
+        const lhRgb = hexToRgb(settings.lhColor);
+        const glow = settings.glowIntensity;
+        const fallDur = settings.fallDuration;
+        const pixelsPerSec = SABER_Y / fallDur;
+
+        // Detect scrubbing backwards to reset impact triggers cleanly
+        if (sim.lastTime > currentTime + 0.08) {
+          sim.triggeredNoteSet.clear();
+          sim.particles.length = 0;
+        }
+        sim.lastTime = currentTime;
+
+        // Gather visible notes, active notes, and upcoming look-ahead notes
+        const visibleNotes = [];
+        const activeNotes = [];
+        const activeL = [];
+        const activeR = [];
+        const upcomingL = [];
+        const upcomingR = [];
+
+        const windowStart = currentTime - 0.15;
+        const windowEnd = currentTime + fallDur + 0.15;
+
+        for (let i = 0; i < notes.length; i++) {
+          const n = notes[i];
+          const nEnd = n.time + n.duration;
+          if (n.time > windowEnd) break;
+          if (nEnd < windowStart) continue;
+
+          visibleNotes.push(n);
+
+          if (currentTime >= n.time && currentTime <= nEnd) {
+            activeNotes.push(n);
+            if (n.hand === 'L') activeL.push(n);
+            else activeR.push(n);
+
+            const keyObj = KEYBOARD.byMidi.get(n.midi);
+            if (keyObj) {
+              const rgb = n.hand === 'L' ? lhRgb : rhRgb;
+              sim.keyEnergy[n.midi] = 1.0;
+              sim.keyColorHand[n.midi] = n.hand;
+              sim.keyPressDepth[n.midi] = Math.min(1.0, sim.keyPressDepth[n.midi] + dt * 26);
+
+              // First impact burst on note attack
+              if (!sim.triggeredNoteSet.has(i)) {
+                sim.triggeredNoteSet.add(i);
+                spawnNoteSparks(sim, keyObj, rgb, n.velocity, true);
+              } else if (Math.random() < dt * 24) {
+                // Continuous subtle ember stream while held
+                spawnNoteSparks(sim, keyObj, rgb, n.velocity * 0.7, false);
+              }
+            }
+          } else if (n.time > currentTime && n.time <= currentTime + 0.85) {
+            const info = { note: n, timeUntil: n.time - currentTime };
+            if (n.hand === 'L') upcomingL.push(info);
+            else upcomingR.push(info);
+          }
+        }
+
+        // Decay key LED energy & physical key return for inactive keys
+        const activeMidiSet = new Set(activeNotes.map(n => n.midi));
+        for (let m = MIN_MIDI; m <= MAX_MIDI; m++) {
+          if (!activeMidiSet.has(m)) {
+            sim.keyEnergy[m] = Math.max(0, sim.keyEnergy[m] - dt * 3.8);
+            sim.keyPressDepth[m] = Math.max(0, sim.keyPressDepth[m] - dt * 14);
+          }
+        }
+
+        // Update virtual hand spring kinematics
+        updateHandKinematics(sim.hands.L, activeL, upcomingL, dt);
+        updateHandKinematics(sim.hands.R, activeR, upcomingR, dt);
+
+        // Update physics particles
+        for (let i = sim.particles.length - 1; i >= 0; i--) {
+          const p = sim.particles[i];
+          p.x += p.vx * dt;
+          p.y += p.vy * dt;
+          p.vx *= Math.pow(0.28, dt);
+          p.vy += 175 * dt; // subtle gravity arc
+          p.life -= p.decay * dt;
+          if (p.life <= 0 || p.y > SABER_Y + 30) {
+            sim.particles.splice(i, 1);
+          }
+        }
+
+        /* ------------------ BEGIN CANVAS DRAW ------------------ */
+        ctx.save();
+        ctx.scale(scale, scale);
+
+        // 1. Deep Midnight Background
+        const bgGrad = ctx.createLinearGradient(0, 0, 0, SABER_Y);
+        bgGrad.addColorStop(0, '#03050c');
+        bgGrad.addColorStop(0.62, '#050916');
+        bgGrad.addColorStop(1, '#091025');
+        ctx.fillStyle = bgGrad;
+        ctx.fillRect(0, 0, BASE_W, BASE_H);
+
+        // Subtle vertical octave guide lines & dark black-key lane tinting
+        for (const k of KEYBOARD.keys) {
+          if (k.isBlack) {
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.24)';
+            ctx.fillRect(k.x, 0, k.w, SABER_Y);
+          } else if (k.midi % 12 === 0) {
+            // Octave C boundary line
+            ctx.fillStyle = 'rgba(130, 170, 255, 0.085)';
+            ctx.fillRect(k.x, 0, 1.5, SABER_Y);
+          } else if (k.midi % 12 === 5) {
+            // Subtle F boundary
+            ctx.fillStyle = 'rgba(130, 170, 255, 0.035)';
+            ctx.fillRect(k.x, 0, 1, SABER_Y);
+          }
+        }
+
+        // 2. Ambient Rising Mist Columns above Active Keys (Additive)
+        ctx.save();
+        ctx.globalCompositeOperation = 'lighter';
+        for (let m = MIN_MIDI; m <= MAX_MIDI; m++) {
+          const e = sim.keyEnergy[m];
+          if (e <= 0.02) continue;
+          const k = KEYBOARD.byMidi.get(m);
+          const rgb = sim.keyColorHand[m] === 'L' ? lhRgb : rhRgb;
+          const colH = (170 + 95 * glow) * e;
+          const mistGrad = ctx.createLinearGradient(0, SABER_Y, 0, SABER_Y - colH);
+          mistGrad.addColorStop(0, rgbaStr(rgb, 0.28 * e * glow));
+          mistGrad.addColorStop(0.45, rgbaStr(rgb, 0.09 * e * glow));
+          mistGrad.addColorStop(1, rgbaStr(rgb, 0));
+          ctx.fillStyle = mistGrad;
+          ctx.fillRect(k.x - k.w * 0.45, SABER_Y - colH, k.w * 1.9, colH);
+        }
+        ctx.restore();
+
+        // 3. Falling Notes (Clipped above Saber line)
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(0, 0, BASE_W, SABER_Y);
+        ctx.clip();
+
+        // Pass A: Soft Outer Neon Halo (Additive)
+        if (glow > 0.05) {
+          ctx.save();
+          ctx.globalCompositeOperation = 'lighter';
+          for (let i = 0; i < visibleNotes.length; i++) {
+            const n = visibleNotes[i];
+            const k = KEYBOARD.byMidi.get(n.midi);
+            if (!k) continue;
+            const yBottom = SABER_Y - (n.time - currentTime) * pixelsPerSec;
+            const barH = Math.max(10, n.duration * pixelsPerSec);
+            const yTop = yBottom - barH;
+            if (yBottom < -20 || yTop > SABER_Y + 20) continue;
+
+            const rgb = n.hand === 'L' ? lhRgb : rhRgb;
+            const isActive = currentTime >= n.time && currentTime <= n.time + n.duration;
+            const pad = k.isBlack ? 1.5 : 3;
+            const nx = k.x + pad;
+            const nw = Math.max(6, k.w - pad * 2);
+
+            ctx.shadowColor = rgbaStr(rgb, 0.85);
+            ctx.shadowBlur = (isActive ? 28 : 16) * glow;
+            ctx.fillStyle = rgbaStr(rgb, isActive ? 0.42 : 0.24);
+            drawRoundedRect(ctx, nx, yTop, nw, barH, 7);
+            ctx.fill();
+          }
+          ctx.restore();
+        }
+
+        // Pass B: Crisp Glowing Note Bodies + Incandescent Core
+        for (let i = 0; i < visibleNotes.length; i++) {
+          const n = visibleNotes[i];
+          const k = KEYBOARD.byMidi.get(n.midi);
+          if (!k) continue;
+          const yBottom = SABER_Y - (n.time - currentTime) * pixelsPerSec;
+          const barH = Math.max(10, n.duration * pixelsPerSec);
+          const yTop = yBottom - barH;
+          if (yBottom < -10 || yTop > SABER_Y + 10) continue;
+
+          const rgb = n.hand === 'L' ? lhRgb : rhRgb;
+          const isActive = currentTime >= n.time && currentTime <= n.time + n.duration;
+          const pad = k.isBlack ? 1.2 : 2.8;
+          const nx = k.x + pad;
+          const nw = Math.max(6, k.w - pad * 2);
+
+          // Main horizontal cylinder gradient
+          const grad = ctx.createLinearGradient(nx, 0, nx + nw, 0);
+          const brightnessBoost = k.isBlack ? 1.18 : 1.0;
+          const cR = Math.min(255, Math.round(rgb.r * brightnessBoost));
+          const cG = Math.min(255, Math.round(rgb.g * brightnessBoost));
+          const cB = Math.min(255, Math.round(rgb.b * brightnessBoost));
+
+          grad.addColorStop(0, `rgba(${Math.round(cR * 0.55)}, ${Math.round(cG * 0.55)}, ${Math.round(cB * 0.55)}, 0.94)`);
+          grad.addColorStop(0.28, `rgba(${cR}, ${cG}, ${cB}, 0.98)`);
+          grad.addColorStop(0.5, isActive ? 'rgba(255,255,255,0.96)' : `rgba(${Math.min(255, cR + 90)}, ${Math.min(255, cG + 90)}, ${Math.min(255, cB + 90)}, 0.98)`);
+          grad.addColorStop(0.72, `rgba(${cR}, ${cG}, ${cB}, 0.98)`);
+          grad.addColorStop(1, `rgba(${Math.round(cR * 0.55)}, ${Math.round(cG * 0.55)}, ${Math.round(cB * 0.55)}, 0.94)`);
+
+          ctx.fillStyle = grad;
+          drawRoundedRect(ctx, nx, yTop, nw, barH, 6.5);
+          ctx.fill();
+
+          // Specular rim stroke
+          ctx.strokeStyle = isActive
+            ? 'rgba(255, 255, 255, 0.92)'
+            : rgbaStr({ r: Math.min(255, rgb.r + 120), g: Math.min(255, rgb.g + 120), b: Math.min(255, rgb.b + 120) }, 0.65);
+          ctx.lineWidth = isActive ? 1.8 : 1.1;
+          ctx.stroke();
+
+          // Subtle leading-edge flare near bottom of note
+          if (barH > 14) {
+            const capGrad = ctx.createLinearGradient(0, yBottom - 18, 0, yBottom);
+            capGrad.addColorStop(0, 'rgba(255,255,255,0)');
+            capGrad.addColorStop(1, 'rgba(255,255,255,0.55)');
+            ctx.fillStyle = capGrad;
+            drawRoundedRect(ctx, nx + 1.5, yBottom - 16, Math.max(2, nw - 3), 15, 5);
+            ctx.fill();
+          }
+        }
+        ctx.restore();
+
+        // 4. 88-Key Piano Rendering (White Keys, Black Keys, LED Glow & Depression)
+        renderPianoKeyboard(ctx, sim, rhRgb, lhRgb, glow);
+
+        // 5. Horizontal Glowing Saber Impact Beam + Localized Key Blooms
+        renderSaberLine(ctx, sim, rhRgb, lhRgb, glow);
+
+        // 6. Physics-Driven Glowing Spark Particles (Additive)
+        renderParticles(ctx, sim, glow);
+
+        // 7. Procedural Auto-Generated Virtual Hands
+        if (settings.handStyle !== 'hidden') {
+          renderVirtualHand(ctx, sim.hands.L, lhRgb, glow, settings.handStyle);
+          renderVirtualHand(ctx, sim.hands.R, rhRgb, glow, settings.handStyle);
+        }
+
+        ctx.restore();
+      }
+
+      function renderPianoKeyboard(ctx, sim, rhRgb, lhRgb, glow) {
+        // Keyboard recessed bed shadow
+        ctx.fillStyle = '#05070e';
+        ctx.fillRect(0, SABER_Y, BASE_W, KEYBOARD_H);
+
+        // --- WHITE KEYS ---
+        for (const k of KEYBOARD.keys) {
+          if (k.isBlack) continue;
+          const energy = sim.keyEnergy[k.midi];
+          const press = sim.keyPressDepth[k.midi];
+          const rgb = sim.keyColorHand[k.midi] === 'L' ? lhRgb : rhRgb;
+
+          const pressY = press * 5.5;
+          const kx = k.x + 0.9;
+          const kw = k.w - 1.8;
+          const kh = k.h - 3;
+
+          // Ivory body gradient
+          const wGrad = ctx.createLinearGradient(0, SABER_Y + pressY, 0, BASE_H);
+          if (energy > 0.02) {
+            wGrad.addColorStop(0, `rgb(${Math.round(230 - (230 - rgb.r) * energy * 0.85)}, ${Math.round(236 - (236 - rgb.g) * energy * 0.85)}, ${Math.round(248 - (248 - rgb.b) * energy * 0.85)})`);
+            wGrad.addColorStop(0.55, `rgb(${Math.round(245 - (245 - rgb.r) * energy * 0.52)}, ${Math.round(248 - (248 - rgb.g) * energy * 0.52)}, ${Math.round(255 - (255 - rgb.b) * energy * 0.52)})`);
+            wGrad.addColorStop(1, `rgb(${Math.round(210 - (210 - rgb.r) * energy * 0.45)}, ${Math.round(216 - (216 - rgb.g) * energy * 0.45)}, ${Math.round(230 - (230 - rgb.b) * energy * 0.45)})`);
+          } else {
+            wGrad.addColorStop(0, '#cfd6e6');
+            wGrad.addColorStop(0.08, '#f4f7ff');
+            wGrad.addColorStop(0.86, '#e6ecf7');
+            wGrad.addColorStop(1, '#bfc8db');
+          }
+
+          ctx.fillStyle = wGrad;
+          drawRoundedRect(ctx, kx, SABER_Y + 2 + pressY, kw, kh - pressY, 4.5);
+          ctx.fill();
+
+          // Key depression top shadow
+          if (press > 0.05) {
+            ctx.fillStyle = `rgba(0, 0, 0, ${0.28 * press})`;
+            ctx.fillRect(kx, SABER_Y + 2 + pressY, kw, 16);
+          }
+
+          // Intense Radial LED Glow on active white key
+          if (energy > 0.03) {
+            ctx.save();
+            ctx.globalCompositeOperation = 'lighter';
+            const ledGrad = ctx.createRadialGradient(k.cx, SABER_Y + 24, 2, k.cx, SABER_Y + 70, k.w * 2.1);
+            ledGrad.addColorStop(0, rgbaStr(rgb, 0.85 * energy * glow));
+            ledGrad.addColorStop(0.5, rgbaStr(rgb, 0.34 * energy * glow));
+            ledGrad.addColorStop(1, rgbaStr(rgb, 0));
+            ctx.fillStyle = ledGrad;
+            ctx.fillRect(kx - k.w * 0.3, SABER_Y, kw + k.w * 0.6, kh);
+            ctx.restore();
+          }
+
+          // Subtle C-note label on bottom of white C keys
+          if (k.midi % 12 === 0) {
+            ctx.fillStyle = energy > 0.2 ? 'rgba(255,255,255,0.9)' : 'rgba(65,78,108,0.55)';
+            ctx.font = '600 11px -apple-system, BlinkMacSystemFont, sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText(midiToName(k.midi), k.cx, BASE_H - 12);
+          }
+        }
+
+        // --- BLACK KEYS ---
+        for (const k of KEYBOARD.keys) {
+          if (!k.isBlack) continue;
+          const energy = sim.keyEnergy[k.midi];
+          const press = sim.keyPressDepth[k.midi];
+          const rgb = sim.keyColorHand[k.midi] === 'L' ? lhRgb : rhRgb;
+
+          const pressY = press * 4.5;
+          const kx = k.x;
+          const kw = k.w;
+          const kh = k.h;
+
+          // Drop shadow onto adjacent white keys
+          ctx.fillStyle = 'rgba(0, 0, 0, 0.52)';
+          drawRoundedRect(ctx, kx - 1.5, SABER_Y + 3, kw + 3.5, kh + 6 - pressY * 0.5, 4);
+          ctx.fill();
+
+          // Ebony key bevel gradient
+          const bGrad = ctx.createLinearGradient(0, SABER_Y + pressY, 0, SABER_Y + kh);
+          if (energy > 0.02) {
+            bGrad.addColorStop(0, `rgb(${Math.round(30 + rgb.r * energy * 0.72)}, ${Math.round(35 + rgb.g * energy * 0.72)}, ${Math.round(50 + rgb.b * energy * 0.72)})`);
+            bGrad.addColorStop(0.75, `rgb(${Math.round(22 + rgb.r * energy * 0.92)}, ${Math.round(26 + rgb.g * energy * 0.92)}, ${Math.round(38 + rgb.b * energy * 0.92)})`);
+            bGrad.addColorStop(1, `rgb(${Math.round(14 + rgb.r * energy * 0.55)}, ${Math.round(18 + rgb.g * energy * 0.55)}, ${Math.round(28 + rgb.b * energy * 0.55)})`);
+          } else {
+            bGrad.addColorStop(0, '#2a3040');
+            bGrad.addColorStop(0.12, '#141824');
+            bGrad.addColorStop(0.84, '#0c0f18');
+            bGrad.addColorStop(1, '#252c3e');
+          }
+
+          ctx.fillStyle = bGrad;
+          drawRoundedRect(ctx, kx, SABER_Y + 1 + pressY, kw, kh - pressY, 4);
+          ctx.fill();
+
+          // Top chamfer specular highlight
+          ctx.fillStyle = energy > 0.05
+            ? rgbaStr({ r: Math.min(255, rgb.r + 120), g: Math.min(255, rgb.g + 120), b: Math.min(255, rgb.b + 120) }, 0.75 * energy)
+            : 'rgba(255, 255, 255, 0.13)';
+          drawRoundedRect(ctx, kx + 2.5, SABER_Y + 5 + pressY, kw - 5, kh - 18 - pressY, 2.5);
+          ctx.fill();
+
+          // Active Black Key LED Halo
+          if (energy > 0.03) {
+            ctx.save();
+            ctx.globalCompositeOperation = 'lighter';
+            const bLed = ctx.createRadialGradient(k.cx, SABER_Y + kh * 0.45, 1, k.cx, SABER_Y + kh * 0.5, kw * 1.9);
+            bLed.addColorStop(0, rgbaStr(rgb, 0.9 * energy * glow));
+            bLed.addColorStop(1, rgbaStr(rgb, 0));
+            ctx.fillStyle = bLed;
+            ctx.fillRect(kx - kw, SABER_Y, kw * 3, kh + 20);
+            ctx.restore();
+          }
+        }
+      }
+
+      function renderSaberLine(ctx, sim, rhRgb, lhRgb, glow) {
+        ctx.save();
+        ctx.globalCompositeOperation = 'lighter';
+
+        // Base subtle crimson/cyan/violet horizon saber line
+        const baseGrad = ctx.createLinearGradient(0, 0, BASE_W, 0);
+        baseGrad.addColorStop(0, rgbaStr(lhRgb, 0.5));
+        baseGrad.addColorStop(0.5, 'rgba(180, 225, 255, 0.65)');
+        baseGrad.addColorStop(1, rgbaStr(rhRgb, 0.5));
+
+        ctx.shadowColor = 'rgba(120, 210, 255, 0.9)';
+        ctx.shadowBlur = 14 * glow;
+        ctx.fillStyle = baseGrad;
+        ctx.fillRect(0, SABER_Y - 2.2, BASE_W, 4.4);
+
+        // Thin incandescent white plasma core
+        ctx.shadowBlur = 0;
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.72)';
+        ctx.fillRect(0, SABER_Y - 0.9, BASE_W, 1.8);
+
+        // Localized high-intensity saber flares where keys are currently struck
+        for (let m = MIN_MIDI; m <= MAX_MIDI; m++) {
+          const e = sim.keyEnergy[m];
+          if (e <= 0.04) continue;
+          const k = KEYBOARD.byMidi.get(m);
+          const rgb = sim.keyColorHand[m] === 'L' ? lhRgb : rhRgb;
+
+          const radX = (34 + 36 * glow) * (0.65 + e * 0.5);
+          const radY = (14 + 16 * glow) * (0.65 + e * 0.5);
+
+          ctx.save();
+          ctx.translate(k.cx, SABER_Y);
+          ctx.scale(1, radY / radX);
+          const flare = ctx.createRadialGradient(0, 0, 1, 0, 0, radX);
+          flare.addColorStop(0, `rgba(255, 255, 255, ${0.95 * e})`);
+          flare.addColorStop(0.28, rgbaStr(rgb, 0.85 * e * glow));
+          flare.addColorStop(1, rgbaStr(rgb, 0));
+          ctx.fillStyle = flare;
+          ctx.beginPath();
+          ctx.arc(0, 0, radX, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+        }
+        ctx.restore();
+      }
+
+      function renderParticles(ctx, sim, glow) {
+        if (sim.particles.length === 0) return;
+        ctx.save();
+        ctx.globalCompositeOperation = 'lighter';
+
+        for (let i = 0; i < sim.particles.length; i++) {
+          const p = sim.particles[i];
+          const alpha = Math.max(0, Math.min(1, p.life));
+          const rad = p.size * (0.55 + alpha * 0.75);
+
+          // Outer glow halo
+          const g = ctx.createRadialGradient(p.x, p.y, 0.2, p.x, p.y, rad * (2.6 + glow * 1.1));
+          if (p.hot) {
+            g.addColorStop(0, `rgba(255, 255, 255, ${alpha})`);
+            g.addColorStop(0.32, `rgba(${p.r}, ${p.g}, ${p.b}, ${alpha * 0.82})`);
+          } else {
+            g.addColorStop(0, `rgba(${Math.min(255, p.r + 90)}, ${Math.min(255, p.g + 90)}, ${Math.min(255, p.b + 90)}, ${alpha * 0.95})`);
+            g.addColorStop(0.45, `rgba(${p.r}, ${p.g}, ${p.b}, ${alpha * 0.55})`);
+          }
+          g.addColorStop(1, `rgba(${p.r}, ${p.g}, ${p.b}, 0)`);
+
+          ctx.fillStyle = g;
+          ctx.beginPath();
+          ctx.arc(p.x, p.y, rad * (2.6 + glow * 1.1), 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.restore();
+      }
+
+      function renderVirtualHand(ctx, hand, rgb, glow, style) {
+        if (hand.alpha <= 0.02) return;
+        const isRight = hand.side === 'R';
+        const alpha = hand.alpha;
+
+        ctx.save();
+        ctx.globalCompositeOperation = 'lighter';
+
+        const palmX = hand.x;
+        const palmY = SABER_Y + 178;
+        const wristY = BASE_H + 34;
+
+        // Knuckle anchor positions across the top of the translucent palm
+        const knuckleOffsets = isRight
+          ? [-44, -22, 0, 22, 42]
+          : [44, 22, 0, -22, -42];
+        const knuckleYOffsets = [22, -8, -14, -7, 6];
+
+        if (style === 'full') {
+          // 1. Sleek Futuristic Translucent Palm & Forearm Silhouette
+          ctx.save();
+          const palmGrad = ctx.createRadialGradient(palmX, palmY + 8, 8, palmX, palmY + 20, 105);
+          palmGrad.addColorStop(0, rgbaStr(rgb, 0.28 * alpha));
+          palmGrad.addColorStop(0.65, rgbaStr(rgb, 0.13 * alpha));
+          palmGrad.addColorStop(1, rgbaStr(rgb, 0.01));
+
+          ctx.fillStyle = palmGrad;
+          ctx.strokeStyle = rgbaStr(rgb, 0.52 * alpha);
+          ctx.lineWidth = 2.0;
+          ctx.shadowColor = rgbaStr(rgb, 0.75 * alpha);
+          ctx.shadowBlur = 16 * glow;
+
+          ctx.beginPath();
+          // Wrist base left -> palm arch -> knuckle crest -> wrist base right
+          const leftSide = palmX - 54;
+          const rightSide = palmX + 54;
+          ctx.moveTo(palmX - 38, wristY);
+          ctx.bezierCurveTo(palmX - 44, palmY + 42, leftSide - 8, palmY + 14, palmX + (isRight ? -46 : -44), palmY - 6);
+          ctx.quadraticCurveTo(palmX, palmY - 26, palmX + (isRight ? 44 : 46), palmY - 6);
+          ctx.bezierCurveTo(rightSide + 8, palmY + 14, palmX + 44, palmY + 42, palmX + 38, wristY);
+          ctx.closePath();
+          ctx.fill();
+          ctx.stroke();
+
+          // Subtle luminous palm energy core arc
+          ctx.strokeStyle = rgbaStr({ r: 255, g: 255, b: 255 }, 0.24 * alpha);
+          ctx.lineWidth = 1.3;
+          ctx.beginPath();
+          ctx.arc(palmX, palmY + 12, 24, Math.PI * 1.12, Math.PI * 1.88);
+          ctx.stroke();
+          ctx.restore();
+
+          // 2. Articulated Translucent Finger Arcs (Knuckle -> Mid-Joint -> Fingertip)
+          for (let f = 0; f < 5; f++) {
+            const finger = hand.fingers[f];
+            const kx = palmX + knuckleOffsets[f];
+            const ky = palmY + knuckleYOffsets[f];
+            const fx = finger.x;
+            const fy = finger.y;
+
+            // Mid-joint control point lifts gently when relaxed and bows slightly when pressing
+            const mx = (kx + fx) * 0.5;
+            const my = (ky + fy) * 0.5 - (14 - finger.press * 8);
+            const widthBase = f === 0 ? 15 : (f === 4 ? 10 : 12.5);
+
+            // Outer translucent finger glow tube
+            ctx.save();
+            ctx.lineCap = 'round';
+            ctx.strokeStyle = rgbaStr(rgb, (0.22 + finger.press * 0.36) * alpha);
+            ctx.lineWidth = widthBase;
+            ctx.beginPath();
+            ctx.moveTo(kx, ky);
+            ctx.quadraticCurveTo(mx, my, fx, fy);
+            ctx.stroke();
+
+            // Inner glowing skeletal tendon line
+            ctx.strokeStyle = rgbaStr(
+              { r: Math.min(255, rgb.r + 120), g: Math.min(255, rgb.g + 120), b: Math.min(255, rgb.b + 120) },
+              (0.35 + finger.press * 0.55) * alpha
+            );
+            ctx.lineWidth = 2.4;
+            ctx.shadowColor = rgbaStr(rgb, 0.9);
+            ctx.shadowBlur = (8 + finger.press * 12) * glow;
+            ctx.beginPath();
+            ctx.moveTo(kx, ky);
+            ctx.quadraticCurveTo(mx, my, fx, fy);
+            ctx.stroke();
+
+            // Luminous knuckle & mid-joint nodes
+            ctx.fillStyle = rgbaStr(rgb, 0.55 * alpha);
+            ctx.beginPath();
+            ctx.arc(kx, ky, 3.6, 0, Math.PI * 2);
+            ctx.arc(mx, my + 2, 2.6, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.restore();
+          }
+        }
+
+        // 3. Glowing Fingertip Rings & Downward Press Beams (Shown in BOTH 'full' & 'rings' modes)
+        for (let f = 0; f < 5; f++) {
+          const finger = hand.fingers[f];
+          const p = finger.press;
+          const fx = finger.x;
+          const fy = finger.y;
+
+          const baseRingR = style === 'rings' ? 10 : 7.5;
+          const ringR = baseRingR + p * 7.5;
+
+          ctx.save();
+          // Subtle downward laser contact beam when pressing a key
+          if (p > 0.08) {
+            const beamGrad = ctx.createLinearGradient(fx, fy - 24, fx, fy + 16);
+            beamGrad.addColorStop(0, rgbaStr(rgb, 0));
+            beamGrad.addColorStop(0.6, rgbaStr(rgb, 0.55 * p * alpha));
+            beamGrad.addColorStop(1, `rgba(255, 255, 255, ${0.85 * p * alpha})`);
+            ctx.strokeStyle = beamGrad;
+            ctx.lineWidth = 3.2;
+            ctx.beginPath();
+            ctx.moveTo(fx, fy - 24);
+            ctx.lineTo(fx, fy + 6);
+            ctx.stroke();
+          }
+
+          // Outer neon fingertip ring
+          ctx.strokeStyle = p > 0.15
+            ? `rgba(255, 255, 255, ${(0.55 + p * 0.45) * alpha})`
+            : rgbaStr(rgb, 0.58 * alpha);
+          ctx.lineWidth = 1.6 + p * 1.4;
+          ctx.shadowColor = rgbaStr(rgb, 0.95);
+          ctx.shadowBlur = (10 + p * 16) * glow;
+          ctx.beginPath();
+          ctx.arc(fx, fy, ringR, 0, Math.PI * 2);
+          ctx.stroke();
+
+          // Glowing fingertip core dot
+          const tipGlow = ctx.createRadialGradient(fx, fy, 0.5, fx, fy, ringR * 1.1);
+          tipGlow.addColorStop(0, `rgba(255, 255, 255, ${(0.45 + p * 0.55) * alpha})`);
+          tipGlow.addColorStop(0.5, rgbaStr(rgb, (0.3 + p * 0.55) * alpha));
+          tipGlow.addColorStop(1, rgbaStr(rgb, 0));
+          ctx.fillStyle = tipGlow;
+          ctx.beginPath();
+          ctx.arc(fx, fy, ringR * 1.1, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.restore();
+        }
+
+        ctx.restore();
+      }
+
+      /* ============================================================================
+         7. PRECISION LIVE PLAYBACK CLOCK & LOOKAHEAD AUDIO SCHEDULER
+            - Guarantees zero audio/visual drift and zero dropped notes
+      ============================================================================ */
+      const playback = {
+        isPlaying: false,
+        songTime: 0,
+        anchorPerfTime: 0,
+        anchorSongTime: 0,
+        nextScheduleIdx: 0,
+        schedulerTimer: null
+      };
+
+      const LOOKAHEAD_SEC = 0.14;
+      const SCHEDULER_INTERVAL_MS = 22;
+
+      function getCurrentSongTime() {
+        if (!playback.isPlaying) return playback.songTime;
+        const elapsedSec = (performance.now() - playback.anchorPerfTime) / 1000;
+        return playback.anchorSongTime + elapsedSec * settings.playbackSpeed;
+      }
+
+      function findFirstNoteIndexAtOrAfter(songSec) {
+        const arr = songState.rawNotes;
+        let lo = 0, hi = arr.length;
+        while (lo < hi) {
+          const mid = (lo + hi) >> 1;
+          if (arr[mid].time < songSec) lo = mid + 1;
+          else hi = mid;
+        }
+        return lo;
+      }
+
+      function runAudioLookaheadScheduler() {
+        if (!playback.isPlaying || !piano.ctx) return;
+
+        const nowSong = getCurrentSongTime();
+        const horizonSong = nowSong + LOOKAHEAD_SEC * settings.playbackSpeed;
+        const audioNow = piano.ctx.currentTime;
+        const notes = songState.rawNotes;
+
+        while (playback.nextScheduleIdx < notes.length) {
+          const n = notes[playback.nextScheduleIdx];
+          if (n.time > horizonSong) break;
+
+          const deltaSongSec = n.time - nowSong;
+          const deltaRealSec = deltaSongSec / settings.playbackSpeed;
+
+          // Only play notes that haven't already passed by >45ms
+          if (deltaRealSec >= -0.045) {
+            const targetAudioTime = audioNow + Math.max(0.002, deltaRealSec);
+            const scaledDur = n.audioDuration / settings.playbackSpeed;
+            piano.scheduleLiveNote(n.midi, targetAudioTime, scaledDur, n.velocity);
+          }
+          playback.nextScheduleIdx++;
+        }
+      }
+
+      async function startPlayback() {
+        if (songState.rawNotes.length === 0) return;
+        piano.ensureContext();
+        await piano.ensureDecodedForLive();
+
+        if (playback.songTime >= songState.duration - 0.05) {
+          playback.songTime = 0;
+          resetSimState(liveSim);
+        }
+
+        playback.isPlaying = true;
+        playback.anchorSongTime = playback.songTime;
+        playback.anchorPerfTime = performance.now();
+        playback.nextScheduleIdx = findFirstNoteIndexAtOrAfter(playback.songTime - 0.005);
+
+        if (playback.schedulerTimer) clearInterval(playback.schedulerTimer);
+        playback.schedulerTimer = setInterval(runAudioLookaheadScheduler, SCHEDULER_INTERVAL_MS);
+        runAudioLookaheadScheduler();
+
+        updatePlayButtonUI();
+        scheduleUIAutoHide();
+      }
+
+      function pausePlayback() {
+        if (!playback.isPlaying) return;
+        playback.songTime = Math.min(songState.duration, getCurrentSongTime());
+        playback.isPlaying = false;
+        if (playback.schedulerTimer) {
+          clearInterval(playback.schedulerTimer);
+          playback.schedulerTimer = null;
+        }
+        piano.stopAllLive();
+        updatePlayButtonUI();
+        showUIControls();
+      }
+
+      function seekToTime(targetSec) {
+        const clamped = Math.max(0, Math.min(songState.duration, targetSec));
+        const wasPlaying = playback.isPlaying;
+        piano.stopAllLive();
+        playback.songTime = clamped;
+        playback.anchorSongTime = clamped;
+        playback.anchorPerfTime = performance.now();
+        playback.nextScheduleIdx = findFirstNoteIndexAtOrAfter(clamped);
+        liveSim.triggeredNoteSet.clear();
+        liveSim.particles.length = 0;
+
+        if (wasPlaying) {
+          runAudioLookaheadScheduler();
+        }
+        updateTimelineUI(clamped);
+      }
+
+      function resetPlaybackToStart() {
+        pausePlayback();
+        playback.songTime = 0;
+        playback.anchorSongTime = 0;
+        resetSimState(liveSim);
+        updateTimelineUI(0);
+      }
+
+      /* ============================================================================
+         8. DIRECT OFFLINE 4K MP4 EXPORTER
+            - Primary Engine: OfflineAudioContext + WebCodecs (VideoEncoder + AudioEncoder) + mp4-muxer
+              (Renders crisp native 3840x2160 frames deterministically offscreen & downloads MP4 directly!)
+            - Automatic Fallback: MediaRecorder (for older Safari versions without WebCodecs AudioEncoder)
+      ============================================================================ */
+      let exportAbortFlag = false;
+      let wakeLockSentinel = null;
+
+      async function requestWakeLock() {
+        try {
+          if ('wakeLock' in navigator) {
+            wakeLockSentinel = await navigator.wakeLock.request('screen');
+          }
+        } catch (_) {}
+      }
+
+      function releaseWakeLock() {
+        try {
+          if (wakeLockSentinel) {
+            wakeLockSentinel.release();
+            wakeLockSentinel = null;
+          }
+        } catch (_) {}
+      }
+
+      function triggerBlobDownload(blob, filename) {
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        setTimeout(() => {
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+        }, 4000);
+      }
+
+      function sanitizeFilename(name) {
+        return (name || 'LuminaKeys_Piano')
+          .replace(/\.[^/.]+$/, '')
+          .replace(/[^a-zA-Z0-9_-]+/g, '_')
+          .slice(0, 48);
+      }
+
+      async function probeBestVideoConfig(width, height, fps) {
+        const is4K = width >= 3840;
+        const bitrate = is4K ? (fps >= 60 ? 28_000_000 : 20_000_000) : 12_000_000;
+        // High -> Main -> Baseline AVC codec strings matching 4K (Level 5.1/5.2) or 1080p (Level 4.2/4.0)
+        const candidates = is4K
+          ? ['avc1.640033', 'avc1.640034', 'avc1.4d0033', 'avc1.420033']
+          : ['avc1.64002a', 'avc1.4d002a', 'avc1.640028', 'avc1.420028'];
+
+        for (const codec of candidates) {
+          const cfg = {
+            codec,
+            width,
+            height,
+            bitrate,
+            framerate: fps,
+            avc: { format: 'avc' }
+          };
+          try {
+            const support = await VideoEncoder.isConfigSupported(cfg);
+            if (support && support.supported) return cfg;
+          } catch (_) {}
+        }
+        return null;
+      }
+
+      async function probeBestAudioConfig(sampleRate) {
+        if (typeof AudioEncoder === 'undefined') return null;
+        const candidates = [
+          { muxerCodec: 'aac', config: { codec: 'mp4a.40.2', sampleRate, numberOfChannels: 2, bitrate: 192_000 } },
+          { muxerCodec: 'opus', config: { codec: 'opus', sampleRate, numberOfChannels: 2, bitrate: 160_000 } }
+        ];
+        for (const c of candidates) {
+          try {
+            const support = await AudioEncoder.isConfigSupported(c.config);
+            if (support && support.supported) return c;
+          } catch (_) {}
+        }
+        return null;
+      }
+
+      function updateExportModal(percent, statusText, frameText, etaText) {
+        document.getElementById('export-progress-fill').style.width = `${Math.max(0, Math.min(100, percent)).toFixed(1)}%`;
+        document.getElementById('export-percent-label').textContent = `${Math.round(percent)}%`;
+        if (statusText !== undefined) document.getElementById('export-status-text').textContent = statusText;
+        if (frameText !== undefined) document.getElementById('export-frame-label').textContent = frameText;
+        if (etaText !== undefined) document.getElementById('export-eta-label').textContent = etaText;
+      }
+
+      async function startVideoExport() {
+        if (songState.rawNotes.length === 0) return;
+
+        pausePlayback();
+        exportAbortFlag = false;
+
+        const preset = document.getElementById('export-res-select').value;
+        let width = 3840, height = 2160, fps = 60, tag = '4K_60fps';
+        if (preset === '4k30') { width = 3840; height = 2160; fps = 30; tag = '4K_30fps'; }
+        else if (preset === '1080p60') { width = 1920; height = 1080; fps = 60; tag = '1080p_60fps'; }
+
+        const modal = document.getElementById('export-modal');
+        const badge = document.getElementById('export-engine-badge');
+        const noteBox = document.getElementById('export-note');
+        modal.classList.add('active');
+        document.getElementById('export-modal-title').textContent = `Exporting ${width}×${height} (${fps}fps)`;
+        updateExportModal(1, 'Checking hardware WebCodecs MP4 encoder capabilities…', 'Initializing', 'ETA: --');
+
+        await requestWakeLock();
+
+        try {
+          const hasWebCodecs = (typeof VideoEncoder !== 'undefined' && typeof VideoFrame !== 'undefined' && typeof Mp4Muxer !== 'undefined');
+          const videoCfg = hasWebCodecs ? await probeBestVideoConfig(width, height, fps) : null;
+          const audioSupport = hasWebCodecs ? await probeBestAudioConfig(48000) : null;
+
+          if (videoCfg && audioSupport) {
+            badge.textContent = 'OFFLINE WEBCODECS MP4';
+            noteBox.textContent = 'Rendering deterministically offscreen (no live playback needed). Your finished MP4 will download automatically at 100%—keep this tab open until encoding completes.';
+            await exportOfflineWebCodecsMP4(width, height, fps, tag, videoCfg, audioSupport);
+          } else {
+            // Graceful fallback for older Safari versions lacking AudioEncoder
+            badge.textContent = 'STREAM RECORDER FALLBACK';
+            noteBox.textContent = 'This browser version does not expose WebCodecs AudioEncoder yet, so the exporter is using high-bitrate direct MediaRecorder capture. The file will download automatically when finished.';
+            await exportFallbackMediaRecorder(width, height, fps, tag);
+          }
+        } catch (err) {
+          if (!exportAbortFlag) {
+            console.error('Export failed:', err);
+            alert('Video export encountered an error: ' + (err && err.message ? err.message : String(err)));
+          }
+        } finally {
+          releaseWakeLock();
+          modal.classList.remove('active');
+        }
+      }
+
+      async function exportOfflineWebCodecsMP4(width, height, fps, tag, videoCfg, audioSupport) {
+        const speed = settings.playbackSpeed;
+        const totalRealDuration = (songState.duration / speed) + 0.3;
+        const totalFrames = Math.ceil(totalRealDuration * fps);
+        const sampleRate = 48000;
+
+        // 1. Offline Salamander Grand Piano Audio Render (~1-2 seconds!)
+        updateExportModal(3, 'Step 1/3: Rendering studio Salamander Grand Piano audio offscreen…', `0 / ${totalFrames}`, 'ETA: calculating…');
+        const audioBuffer = await piano.renderOfflineTrack(
+          songState.rawNotes,
+          totalRealDuration,
+          speed,
+          sampleRate,
+          (p) => updateExportModal(3 + p * 10, 'Step 1/3: Rendering studio Salamander Grand Piano audio offscreen…')
+        );
+        if (exportAbortFlag) return;
+
+        // 2. Initialize MP4 Muxer + Hardware Encoders
+        const target = new Mp4Muxer.ArrayBufferTarget();
+        const muxer = new Mp4Muxer.Muxer({
+          target,
+          video: { codec: 'avc', width, height },
+          audio: {
+            codec: audioSupport.muxerCodec,
+            numberOfChannels: 2,
+            sampleRate
+          },
+          fastStart: 'in-memory',
+          firstTimestampBehavior: 'offset'
+        });
+
+        let encoderError = null;
+        const videoEncoder = new VideoEncoder({
+          output: (chunk, meta) => muxer.addVideoChunk(chunk, meta),
+          error: (e) => { encoderError = e; }
+        });
+        videoEncoder.configure(videoCfg);
+
+        const audioEncoder = new AudioEncoder({
+          output: (chunk, meta) => muxer.addAudioChunk(chunk, meta),
+          error: (e) => { encoderError = e; }
+        });
+        audioEncoder.configure(audioSupport.config);
+
+        // Encode entire stereo AudioBuffer into AAC/Opus chunks
+        updateExportModal(15, 'Step 2/3: Encoding stereo grand piano audio track…', `0 / ${totalFrames}`, 'ETA: calculating…');
+        const leftCh = audioBuffer.getChannelData(0);
+        const rightCh = audioBuffer.numberOfChannels > 1 ? audioBuffer.getChannelData(1) : leftCh;
+        const chunkSamples = 1024 * 4;
+
+        for (let offset = 0; offset < audioBuffer.length; offset += chunkSamples) {
+          if (exportAbortFlag) {
+            videoEncoder.close();
+            audioEncoder.close();
+            return;
+          }
+          const frameCount = Math.min(chunkSamples, audioBuffer.length - offset);
+          const planar = new Float32Array(frameCount * 2);
+          planar.set(leftCh.subarray(offset, offset + frameCount), 0);
+          planar.set(rightCh.subarray(offset, offset + frameCount), frameCount);
+
+          const audioData = new AudioData({
+            format: 'f32-planar',
+            sampleRate,
+            numberOfFrames: frameCount,
+            numberOfChannels: 2,
+            timestamp: Math.round((offset / sampleRate) * 1_000_000),
+            data: planar
+          });
+          audioEncoder.encode(audioData);
+          audioData.close();
+
+          if (audioEncoder.encodeQueueSize > 16) {
+            await new Promise(r => setTimeout(r, 4));
+          }
+        }
+
+        // 3. Render & Encode Every Native 4K/1080p Frame Deterministically Offscreen
+        const offCanvas = document.createElement('canvas');
+        offCanvas.width = width;
+        offCanvas.height = height;
+        const offCtx = offCanvas.getContext('2d', { alpha: false, desynchronized: true });
+
+        const exportSim = createSimState();
+        const frameDurationUs = Math.round(1_000_000 / fps);
+        const dt = 1 / fps;
+        const encodeStartPerf = performance.now();
+
+        for (let frameIdx = 0; frameIdx < totalFrames; frameIdx++) {
+          if (exportAbortFlag || encoderError) {
+            videoEncoder.close();
+            audioEncoder.close();
+            if (encoderError) throw encoderError;
+            return;
+          }
+
+          // Match exact 50ms audio lead-in pad
+          const realTime = frameIdx / fps;
+          const songTime = Math.max(0, (realTime - 0.05) * speed);
+
+          renderSceneFrame(offCtx, width, height, songTime, dt, exportSim, songState.rawNotes);
+
+          const timestampUs = frameIdx * frameDurationUs;
+          const vFrame = new VideoFrame(offCanvas, {
+            timestamp: timestampUs,
+            duration: frameDurationUs
+          });
+
+          const isKeyFrame = (frameIdx % (fps * 2) === 0);
+          videoEncoder.encode(vFrame, { keyFrame: isKeyFrame });
+          vFrame.close(); // Immediately free GPU texture memory (essential for 4K on iPad!)
+
+          // Backpressure guard so hardware encoder queue never floods RAM
+          while (videoEncoder.encodeQueueSize > 6) {
+            await new Promise(r => setTimeout(r, 6));
+          }
+
+          // Yield periodically to keep UI progress responsive (uses setTimeout, NOT rAF, so tab switching won't stall)
+          if (frameIdx % 4 === 0 || frameIdx === totalFrames - 1) {
+            const frac = (frameIdx + 1) / totalFrames;
+            const elapsedSec = (performance.now() - encodeStartPerf) / 1000;
+            const remainingSec = frac > 0.01 ? (elapsedSec / frac) * (1 - frac) : 0;
+            const etaStr = remainingSec > 0 ? `ETA: ${formatSeconds(remainingSec)}` : 'Finalizing…';
+            updateExportModal(
+              18 + frac * 78,
+              `Step 3/3: Encoding ${width}×${height} glowing frames…`,
+              `Frame ${frameIdx + 1} / ${totalFrames}`,
+              etaStr
+            );
+            await new Promise(r => setTimeout(r, 0));
+          }
+        }
+
+        // 4. Flush Encoders & Finalize MP4 Container
+        updateExportModal(97, 'Finalizing MP4 container & triggering download…', `Frame ${totalFrames} / ${totalFrames}`, 'Almost done');
+        await Promise.all([videoEncoder.flush(), audioEncoder.flush()]);
+        videoEncoder.close();
+        audioEncoder.close();
+
+        if (encoderError) throw encoderError;
+        if (exportAbortFlag) return;
+
+        muxer.finalize();
+        const mp4Blob = new Blob([target.buffer], { type: 'video/mp4' });
+        const filename = `${sanitizeFilename(songState.title)}_${tag}.mp4`;
+        updateExportModal(100, 'Download started!', `Done (${(mp4Blob.size / (1024 * 1024)).toFixed(1)} MB)`, '0:00');
+        triggerBlobDownload(mp4Blob, filename);
+        await new Promise(r => setTimeout(r, 700));
+      }
+
+      // Automatic fallback for older Safari versions lacking WebCodecs AudioEncoder
+      async function exportFallbackMediaRecorder(width, height, fps, tag) {
+        const speed = settings.playbackSpeed;
+        const totalRealDuration = (songState.duration / speed) + 0.3;
+
+        // Render clean offline piano audio first so fallback recording has zero dropped notes
+        updateExportModal(5, 'Rendering Salamander Grand Piano audio track…', 'Audio', 'ETA: --');
+        const renderedAudio = await piano.renderOfflineTrack(songState.rawNotes, totalRealDuration, speed, 48000);
+        if (exportAbortFlag) return;
+
+        piano.ensureContext();
+        const streamDest = piano.ctx.createMediaStreamDestination();
+        const audioSrc = piano.ctx.createBufferSource();
+        audioSrc.buffer = renderedAudio;
+        audioSrc.connect(streamDest);
+
+        // Cap fallback canvas to 1920x1080 if Safari MediaRecorder struggles at 4K real-time
+        const recW = Math.min(width, 3840);
+        const recH = Math.min(height, 2160);
+        const recCanvas = document.createElement('canvas');
+        recCanvas.width = recW;
+        recCanvas.height = recH;
+        const recCtx = recCanvas.getContext('2d', { alpha: false });
+
+        const videoStream = recCanvas.captureStream(fps);
+        const combined = new MediaStream([
+          ...videoStream.getVideoTracks(),
+          ...streamDest.stream.getAudioTracks()
+        ]);
+
+        const mimeCandidates = [
+          'video/mp4;codecs=avc1,mp4a.40.2',
+          'video/mp4',
+          'video/webm;codecs=vp9,opus',
+          'video/webm;codecs=vp8,opus',
+          'video/webm'
+        ];
+        const mimeType = mimeCandidates.find(m => MediaRecorder.isTypeSupported(m)) || '';
+        const ext = mimeType.includes('mp4') ? 'mp4' : 'webm';
+
+        const recorder = new MediaRecorder(combined, {
+          mimeType: mimeType || undefined,
+          videoBitsPerSecond: recW >= 3840 ? 22_000_000 : 12_000_000
+        });
+        const chunks = [];
+        recorder.ondataavailable = (e) => { if (e.data && e.data.size > 0) chunks.push(e.data); };
+
+        const donePromise = new Promise((resolve) => { recorder.onstop = resolve; });
+        const exportSim = createSimState();
+
+        recorder.start(250);
+        audioSrc.start();
+        const startPerf = performance.now();
+        let lastPerf = startPerf;
+
+        await new Promise((resolve) => {
+          function tick() {
+            if (exportAbortFlag) {
+              try { audioSrc.stop(); } catch (_) {}
+              recorder.stop();
+              resolve();
+              return;
+            }
+            const now = performance.now();
+            const elapsed = (now - startPerf) / 1000;
+            const dt = Math.min(0.05, Math.max(0.001, (now - lastPerf) / 1000));
+            lastPerf = now;
+
+            const songTime = Math.max(0, (elapsed - 0.05) * speed);
+            renderSceneFrame(recCtx, recW, recH, songTime, dt, exportSim, songState.rawNotes);
+
+            const pct = Math.min(99, (elapsed / totalRealDuration) * 100);
+            updateExportModal(
+              pct,
+              `Capturing ${recW}×${recH} stream…`,
+              `${formatSeconds(elapsed)} / ${formatSeconds(totalRealDuration)}`,
+              `ETA: ${formatSeconds(Math.max(0, totalRealDuration - elapsed))}`
+            );
+
+            if (elapsed >= totalRealDuration) {
+              try { audioSrc.stop(); } catch (_) {}
+              recorder.stop();
+              resolve();
+            } else {
+              requestAnimationFrame(tick);
+            }
+          }
+          requestAnimationFrame(tick);
+        });
+
+        await donePromise;
+        if (exportAbortFlag) return;
+
+        const blob = new Blob(chunks, { type: mimeType || `video/${ext}` });
+        triggerBlobDownload(blob, `${sanitizeFilename(songState.title)}_${tag}.${ext}`);
+      }
+
+      /* ============================================================================
+         9. LIVE ANIMATION LOOP, UI BINDINGS & iPAD TOUCH ERGONOMICS
+      ============================================================================ */
+      const canvas = document.getElementById('visualizer-canvas');
+      const ctx = canvas.getContext('2d', { alpha: false });
+
+      // Configure crisp high-DPI live buffer (1920x1080 base, scaled smoothly on Retina/iPad)
+      function resizeLiveCanvas() {
+        const dpr = Math.min(window.devicePixelRatio || 1, 2);
+        const rect = canvas.getBoundingClientRect();
+        // Maintain 16:9 crispness while capping at 1920x1080 for buttery 60fps on iPad
+        const targetW = Math.min(1920, Math.max(1280, Math.round(rect.width * dpr)));
+        const targetH = Math.round(targetW * 9 / 16);
+        if (canvas.width !== targetW || canvas.height !== targetH) {
+          canvas.width = targetW;
+          canvas.height = targetH;
+        }
+      }
+      window.addEventListener('resize', resizeLiveCanvas);
+      resizeLiveCanvas();
+
+      let lastFramePerf = performance.now();
+      let isScrubbing = false;
+
+      function mainLoop(now) {
+        const dt = Math.min(0.05, Math.max(0.001, (now - lastFramePerf) / 1000));
+        lastFramePerf = now;
+
+        let t = getCurrentSongTime();
+        if (playback.isPlaying && t >= songState.duration) {
+          t = songState.duration;
+          pausePlayback();
+        }
+
+        if (!isScrubbing && songState.rawNotes.length > 0) {
+          updateTimelineUI(t);
+        }
+
+        renderSceneFrame(ctx, canvas.width, canvas.height, t, dt, liveSim, songState.rawNotes);
+        requestAnimationFrame(mainLoop);
+      }
+      requestAnimationFrame(mainLoop);
+
+      // --- UI Helpers ---
+      function formatSeconds(sec) {
+        const s = Math.max(0, Math.floor(sec));
+        const m = Math.floor(s / 60);
+        const rem = s % 60;
+        return `${m}:${rem < 10 ? '0' : ''}${rem}`;
+      }
+
+      function updateTimelineUI(sec) {
+        const scrubber = document.getElementById('timeline-scrubber');
+        scrubber.max = Math.max(1, songState.duration);
+        scrubber.value = sec;
+        document.getElementById('current-time-label').textContent = formatSeconds(sec);
+        document.getElementById('total-time-label').textContent = formatSeconds(songState.duration);
+      }
+
+      function updatePlayButtonUI() {
+        const btn = document.getElementById('play-pause-btn');
+        btn.textContent = playback.isPlaying ? '⏸ Pause' : '▶ Play';
+      }
+
+      function updateSongUI() {
+        const hasSong = songState.rawNotes.length > 0;
+        document.getElementById('play-pause-btn').disabled = !hasSong;
+        document.getElementById('restart-btn').disabled = !hasSong;
+        document.getElementById('export-btn').disabled = !hasSong;
+        document.getElementById('song-title-text').textContent = hasSong
+          ? `${songState.title} · ${songState.rawNotes.length} notes`
+          : 'No MIDI Loaded — Tap "Load Demo Song"';
+        updateTimelineUI(playback.songTime);
+      }
+
+      // Auto-hide UI during playback (single tap brings controls back)
+      let uiVisible = true;
+      let uiHideTimer = null;
+
+      function setUIVisible(visible) {
+        uiVisible = visible;
+        document.getElementById('control-dock').classList.toggle('hidden-ui', !visible);
+        document.getElementById('top-bar').classList.toggle('hidden-ui', !visible);
+        document.getElementById('toggle-ui-icon').textContent = visible ? '✕' : '☰';
+      }
+
+      function showUIControls() {
+        if (uiHideTimer) clearTimeout(uiHideTimer);
+        setUIVisible(true);
+      }
+
+      function scheduleUIAutoHide() {
+        if (uiHideTimer) clearTimeout(uiHideTimer);
+        if (!playback.isPlaying) return;
+        uiHideTimer = setTimeout(() => {
+          if (playback.isPlaying) setUIVisible(false);
+        }, 4200);
+      }
+
+      document.getElementById('toggle-ui-btn').addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (uiHideTimer) clearTimeout(uiHideTimer);
+        setUIVisible(!uiVisible);
+        if (uiVisible && playback.isPlaying) scheduleUIAutoHide();
+      });
+
+      canvas.addEventListener('click', () => {
+        if (!uiVisible) {
+          showUIControls();
+          scheduleUIAutoHide();
+        } else if (playback.isPlaying) {
+          setUIVisible(false);
+        }
+      });
+
+      document.getElementById('control-dock').addEventListener('pointerdown', () => {
+        if (uiHideTimer) clearTimeout(uiHideTimer);
+      });
+
+      document.getElementById('control-dock').addEventListener('pointerup', () => {
+        if (playback.isPlaying) scheduleUIAutoHide();
+      });
+
+      // Transport buttons
+      document.getElementById('play-pause-btn').addEventListener('click', () => {
+        if (playback.isPlaying) pausePlayback();
+        else startPlayback();
+      });
+
+      document.getElementById('restart-btn').addEventListener('click', () => {
+        const wasPlaying = playback.isPlaying;
+        resetPlaybackToStart();
+        if (wasPlaying) startPlayback();
+      });
+
+      document.getElementById('demo-btn').addEventListener('click', async () => {
+        piano.ensureContext();
+        generateDemoSong();
+        await startPlayback();
+      });
+
+      // Timeline scrubber
+      const scrubber = document.getElementById('timeline-scrubber');
+      scrubber.addEventListener('pointerdown', () => { isScrubbing = true; });
+      scrubber.addEventListener('input', () => {
+        seekToTime(parseFloat(scrubber.value));
+      });
+      scrubber.addEventListener('pointerup', () => { isScrubbing = false; });
+      scrubber.addEventListener('change', () => {
+        isScrubbing = false;
+        seekToTime(parseFloat(scrubber.value));
+      });
+
+      // Speed selector
+      document.getElementById('speed-select').addEventListener('change', (e) => {
+        const newSpeed = parseFloat(e.target.value);
+        if (playback.isPlaying) {
+          // Re-anchor clock cleanly so changing speed mid-song causes zero jump or drift
+          const cur = getCurrentSongTime();
+          settings.playbackSpeed = newSpeed;
+          playback.anchorSongTime = cur;
+          playback.anchorPerfTime = performance.now();
+          piano.stopAllLive();
+          playback.nextScheduleIdx = findFirstNoteIndexAtOrAfter(cur);
+        } else {
+          settings.playbackSpeed = newSpeed;
+        }
+      });
+
+      // Settings Drawer Toggle
+      document.getElementById('drawer-toggle-btn').addEventListener('click', () => {
+        document.getElementById('settings-drawer').classList.toggle('collapsed');
+      });
+
+      // Visual & Hand Controls
+      document.getElementById('hand-style-select').addEventListener('change', (e) => {
+        settings.handStyle = e.target.value;
+      });
+
+      const splitModeSelect = document.getElementById('split-mode-select');
+      const splitPitchSlider = document.getElementById('split-pitch-slider');
+      const splitValLabel = document.getElementById('split-val-label');
+
+      function applySplitSettings() {
+        settings.splitMode = splitModeSelect.value;
+        settings.splitPitch = parseInt(splitPitchSlider.value, 10);
+        splitPitchSlider.style.display = settings.splitMode === 'pitch' ? 'block' : 'none';
+        splitValLabel.textContent = settings.splitMode === 'pitch'
+          ? midiToName(settings.splitPitch)
+          : (songState.hasMultiTrack ? 'Auto (Track)' : `Pitch (${midiToName(settings.splitPitch)})`);
+        if (songState.rawNotes.length > 0) {
+          resolveHandAssignments(songState.rawNotes, settings.splitMode, settings.splitPitch, songState.hasMultiTrack);
+        }
+      }
+
+      splitModeSelect.addEventListener('change', applySplitSettings);
+      splitPitchSlider.addEventListener('input', applySplitSettings);
+
+      document.getElementById('glow-slider').addEventListener('input', (e) => {
+        settings.glowIntensity = parseFloat(e.target.value);
+        document.getElementById('glow-val').textContent = `${settings.glowIntensity.toFixed(2)}×`;
+      });
+
+      document.getElementById('particle-slider').addEventListener('input', (e) => {
+        settings.particleDensity = parseFloat(e.target.value);
+        document.getElementById('particle-val').textContent = `${settings.particleDensity.toFixed(1)}×`;
+      });
+
+      document.getElementById('fall-speed-slider').addEventListener('input', (e) => {
+        settings.fallDuration = parseFloat(e.target.value);
+        document.getElementById('fall-speed-val').textContent = `${settings.fallDuration.toFixed(1)}s`;
+      });
+
+      document.getElementById('reverb-slider').addEventListener('input', (e) => {
+        const v = parseFloat(e.target.value);
+        piano.setReverbMix(v);
+        document.getElementById('reverb-val').textContent = `${Math.round(v * 100)}%`;
+      });
+
+      document.getElementById('rh-color-picker').addEventListener('input', (e) => {
+        settings.rhColor = e.target.value;
+      });
+      document.getElementById('lh-color-picker').addEventListener('input', (e) => {
+        settings.lhColor = e.target.value;
+      });
+
+      // Export & Cancel buttons
+      document.getElementById('export-btn').addEventListener('click', startVideoExport);
+      document.getElementById('cancel-export-btn').addEventListener('click', () => {
+        exportAbortFlag = true;
+      });
+
+      // File Upload & Drag-and-Drop MIDI Handling
+      async function handleMidiFile(file) {
+        if (!file) return;
+        try {
+          piano.ensureContext();
+          const buf = await file.arrayBuffer();
+          const midiObj = new Midi(buf);
+          loadParsedMidiObject(midiObj, file.name);
+          applySplitSettings();
+        } catch (err) {
+          alert('Could not parse MIDI file. Please ensure it is a valid .mid or .midi file.');
+          console.error(err);
+        }
+      }
+
+      document.getElementById('midi-file-input').addEventListener('change', (e) => {
+        const file = e.target.files && e.target.files[0];
+        handleMidiFile(file);
+        e.target.value = '';
+      });
+
+      const dropOverlay = document.getElementById('drop-overlay');
+      window.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        dropOverlay.classList.add('visible');
+      });
+      window.addEventListener('dragleave', (e) => {
+        if (e.relatedTarget === null) dropOverlay.classList.remove('visible');
+      });
+      window.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dropOverlay.classList.remove('visible');
+        const file = e.dataTransfer.files && e.dataTransfer.files[0];
+        if (file) handleMidiFile(file);
+      });
+
+      // Spacebar shortcut for desktop convenience
+      window.addEventListener('keydown', (e) => {
+        if (e.code === 'Space' && !document.getElementById('export-modal').classList.contains('active')) {
+          if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT') return;
+          e.preventDefault();
+          if (songState.rawNotes.length > 0) {
+            if (playback.isPlaying) pausePlayback();
+            else startPlayback();
+          }
+        }
+      });
+
+      /* ============================================================================
+         10. STARTUP: PREFETCH SALAMANDER GRAND PIANO SAMPLES
+      ============================================================================ */
+      const statusDot = document.getElementById('audio-status-dot');
+      const statusText = document.getElementById('audio-status-text');
+
+      piano.loadSamples((loaded, total, done, isSampled) => {
+        if (!done) {
+          statusText.textContent = `Loading Salamander Grand Piano (${loaded}/${total})…`;
+        } else if (isSampled) {
+          statusDot.classList.add('ready');
+          statusText.textContent = 'Salamander Grand Piano Ready';
+        } else {
+          statusDot.classList.add('fallback');
+          statusText.textContent = 'Offline Harmonic Piano Ready';
+        }
+      });
+    })();
+  </script>
+</body>
+</html>
